@@ -67,7 +67,8 @@ private:
     MatTrack& matTrack(int k) { return seq().pat().mat.tracks[(size_t) k]; }
     const MatTrack& matTrack(int k) const { return seq().pat().mat.tracks[(size_t) k]; }
     int matLaneOf(int k) const { return matLane[(size_t) sel][(size_t) k]; }
-    int stepPages() const { return isChord() ? 4 : 3; }
+    int stepPages() const { return isChord() ? 4 : ((seq().mode == Mode::Mono || seq().mode == Mode::Poly) ? 5 : 3); }
+    bool hasAcc() const { auto m = seq().mode; return m == Mode::Mono || m == Mode::Poly || m == Mode::Domino || m == Mode::Saga; }
     bool lanesView() const { return isMulti() && !pianoRoll[(size_t) sel]; }
     int trackIndex() const { return isMulti() ? selTrack[(size_t) sel] : (isDomino() ? 1 : 0); }
     Track& track() { return seq().pat().tracks[(size_t) trackIndex()]; }
@@ -98,6 +99,9 @@ private:
     void renderDominoDisplay(Frame& f) const;
     void renderSaga(Frame& f) const;
     void renderPlayer(Frame& f) const;
+    static void editAcc(Step& st, int page, int knob, int delta);
+    std::string scaleText() const;
+    std::string rootText() const;
     void renderSagaDisplay(Frame& f) const;
     Track& noteTrack() { return seq().pat().tracks[isDomino() ? 0 : (size_t) trackIndex()]; }
     const Track& noteTrack() const { return seq().pat().tracks[isDomino() ? 0 : (size_t) trackIndex()]; }

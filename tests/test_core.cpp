@@ -259,7 +259,7 @@ static void testChords() {
     std::sort(notes.begin(), notes.end());
     CHECK((notes == std::vector<int>{43, 55, 59, 62}));
 
-    q.bassMode = 0; q.chMx = 1; st.strum = 100;
+    q.bassMode = 0; q.chMx = 2; st.strum = 100; // "3 Lo"
     Engine e2(*p);
     auto n2 = ons(run(e2, 0.25));
     CHECK(n2.size() == 3);
@@ -435,6 +435,52 @@ static void testPlayer() {
     CHECK(p2->seqs[2].pat().clip.notes.size() == 3 && p2->seqs[2].pat().clip.name == "test" && p2->seqs[2].pat().clip.lengthTicks == 384);
 }
 
+static std::vector<int> accSeq(int mode, int amt, int mx, int mn, int cycles) {
+    auto p = std::make_unique<Project>();
+    auto& tr = p->seqs[0].pat().tracks[0];
+    tr.end = 3;
+    setNote(tr, 0, 0);
+    auto& st = tr.steps[0];
+    st.accAmt = (int8_t) amt; st.accMode = (uint8_t) mode; st.accMax = (int8_t) mx; st.accMin = (int8_t) mn;
+    Engine e(*p);
+    std::vector<int> r;
+    for (auto& x : ons(run(e, cycles))) r.push_back(x.note - 48);
+    return r;
+}
+
+static void testAccumulatorHarmonizer() {
+    CHECK((accSeq(0, 1, 2, 0, 5) == std::vector<int>{0, 1, 2, 0, 1}));    // wrap
+    CHECK((accSeq(0, 3, 7, -2, 5) == std::vector<int>{0, 3, 6, -1, 2}));  // wrap example from the manual (+3: 0,3,6,-1,2)
+    CHECK((accSeq(1, 1, 2, 0, 5) == std::vector<int>{0, 1, 2, 0, 1}));    // clip
+    CHECK((accSeq(2, 1, 2, 0, 6) == std::vector<int>{0, 1, 2, 1, 0, 1})); // pendulum
+    CHECK((accSeq(3, 1, 2, 0, 5) == std::vector<int>{0, 1, 2, 2, 2}));    // hold
+
+    // harmonizer: sequencer 2 follows the D minor chord of sequencer 1
+    auto p = std::make_unique<Project>();
+    auto& lead = p->seqs[0];
+    lead.mode = Mode::Chord; lead.scale = 1;
+    for (int i = 0; i < 16; ++i) setNote(lead.pat().tracks[0], i, 1);
+    auto& fol = p->seqs[1];
+    fol.harm = 0;
+    for (int i = 0; i < 4; ++i) setNote(fol.pat().tracks[0], i, i);
+    Engine e(*p);
+    std::vector<int> fn;
+    for (auto& x : ons(run(e, 1.0))) if (x.ch == 1) fn.push_back(x.note);
+    CHECK((fn == std::vector<int>{50, 53, 57, 62}));
+
+    // channel multiplex "3 Hi": highest note on the base channel
+    auto p2 = std::make_unique<Project>();
+    auto& pq = p2->seqs[0];
+    pq.mode = Mode::Poly; pq.chMx = 9;
+    auto& st = pq.pat().tracks[0].steps[0];
+    st.active = true; st.numNotes = 3; st.notes = {0, 4, 7, 0, 0, 0, 0};
+    Engine e2(*p2);
+    auto n2 = ons(run(e2, 0.2));
+    std::map<int, int> chOf; for (auto& x : n2) chOf[x.note] = x.ch;
+    CHECK(chOf[55] == 0 && chOf[52] == 1 && chOf[48] == 2);
+    CHECK(chMxLabel(9) == "3 Hi" && chMxLabel(1) == "2 Lo");
+}
+
 int runControllerTests(); // defined in test_controller.cpp
 
 int main() {
@@ -454,6 +500,7 @@ int main() {
     testDomino();
     testSaga();
     testPlayer();
+    testAccumulatorHarmonizer();
     failures += runControllerTests();
     if (failures == 0) std::printf("ALL TESTS PASSED\n");
     else std::printf("%d FAILURE(S)\n", failures);

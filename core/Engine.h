@@ -75,6 +75,8 @@ private:
         int64_t domNote = -1;      // domino: note section step counter
         std::atomic<int> domNoteUi { -1 };
         std::atomic<double> clipProgressUi { 0.0 };
+        std::array<int8_t, kMaxSteps> accVal {};   // accumulator value per step
+        std::array<int8_t, kMaxSteps> accDir {};   // pendulum direction per step
         std::atomic<int> playheadUi { -1 };
     };
 
@@ -105,6 +107,10 @@ private:
     void playSaga(int s, double grid, double L, double bpm);
     void playClip(int s, double grid, double L, double bpm);
     double trackStepLength(int s, int t) const;
+    int accNext(const Step& st, const Track& tr, TrackRt& r, int idx, bool advance);
+    int degPitch(const Sequencer& q, int s, int base, int degree) const;
+    void recordHarm(int s, const int* notes, int n);
+    template <typename V> void assignChMx(const Sequencer& q, V* voices, int first, int n) const;
 
     Project& proj;
     double sr = 44100.0;
@@ -116,6 +122,8 @@ private:
     std::array<int, kNumSeqs> pendingPat {};
     std::array<bool, kNumSeqs> resetPending {};
     std::array<int, kNumSeqs> transposeOffset {};
+    std::array<std::array<int, 8>, kNumSeqs> harmNotes {};   // last chord played by each (leader) sequencer
+    std::array<int, kNumSeqs> harmCount {};
     std::array<std::array<TrackRt, kNumTracks>, kNumSeqs> rt;
     std::vector<Ev> queue;
     std::vector<Ev> due;

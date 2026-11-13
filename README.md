@@ -1,8 +1,31 @@
-# TEK — 8 kanallı performans sequencer'ı (Faz 1 + Faz 2: Chord, Stochastic, Matriceal, Domino, Saga, MIDI Player)
+# TEK — 8 kanallı performans sequencer'ı (Faz 1 + Faz 2 tamam)
 
 TEK, OXI ONE MKII kılavuzunu temel alan bir VST3/AU sequencer plugin'i. Ses üretmiyor, MIDI üretiyor. Ableton'daki synth'leri, drum rack'leri ve harici cihazları sürüyor.
 
-## Faz 2: MIDI Player modu (yeni)
+## Faz 2: Accumulator, Harmonizer, ChMx (yeni)
+
+**Accumulator** (Mono, Poly, Domino, Saga): Step her çaldığında notası ayarlanan aralık kadar kayar.
+- **Açma:** Step'i basılı tutup PAGE ile accumulator sayfasına git. Mono/Poly'de sayfa 4–5, Domino'da 3–4, Saga'da 4–5.
+  - İlk sayfa: **Amt** (her seferde kaç ölçek aralığı, ±24) / **Mode** / **Acml+** / **Acml-**.
+  - İkinci sayfa: **Trig** (All = step + repeat'ler, Step, Rept) / **%Mde** (olasılık tutmazsa: Ignor = orijinal nota, Skip = son değerde kal) / **Acm%** (ilerleme olasılığı).
+- **Modlar:**
+  - Wrap: sınırı aşınca öbür uçtan devam eder.
+  - Clip: sınıra gelince öbür uçtan baştan başlar.
+  - Pend: sınırda yön değiştirir.
+  - Hold: sınırda sabit kalır.
+- **Global (STEP → 3. sayfa):** **AcmM** = Step (sınırlar her step'te ayrı) veya Trck (aşağıdaki Acml+/- tüm step'ler için geçerli).
+
+**Harmonizer:** Bir sequencer'ın notalarını, başka bir sequencer'ın (lider: Chord veya Poly) o an çaldığı akora uydurur.
+- **Takipçiyi ayarlama:** Takipçi sequencer'da Shift + knob 3'ü (SCAL) en baştan da geriye çevir, ölçek **HARMON** olur. Shift + knob 4 (ROOT) ile lideri seç (Sq1–Sq8).
+- **Kullanım:** Takipçide grid satırları liderin akor notalarına denk gelir. En alt satır akorun ilk notası, sonrakiler diğer notalar, daha yukarısı bir üst oktav. Lider akor değiştirdikçe takipçinin melodisi kendiliğinden uyum sağlar.
+- **Desteklenen takipçiler:** Mono, Poly, Multitrack, Matriceal, Domino, Saga. Lider henüz çalmadıysa C major varsayılır.
+
+**ChMx (Channel Multiplex):** Setup sayfa 3'te seçilir (Poly, Chord, Domino, Saga).
+- **2 Lo…8 Lo:** En alt nota temel kanalda kalır, üstündekiler sırayla sonraki kanallara dağılır.
+- **2 Hi…8 Hi:** Aynı mantık ama en üst nota temel kanalda kalır.
+- Sayı, kaç kanala dağıtılacağıdır. Notalar o sayıya ulaşınca dağıtım temel kanala döner.
+
+## Faz 2: MIDI Player modu
 
 Setup'ta knob 4 ile **PLYR** seç. Ardından **Shift + PERF**'e bas ve bilgisayarından bir **.mid** dosyası seç. Sequencer dosyadaki notaları döngü halinde, Ableton'a senkron çalar.
 

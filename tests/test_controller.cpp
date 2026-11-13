@@ -266,5 +266,27 @@ int runControllerTests() {
         Frame f; r.c.render(f, r.t);
         CCHECK(f.line1.find("T.Durat:23") != std::string::npos);
     }
+    { // accumulator pages and harmonizer selection
+        Rig r;
+        r.tap(0, 7);
+        r.c.padDown(0, 7, r.t); r.t += 600;
+        r.press(Btn::Page); r.press(Btn::Page); r.press(Btn::Page); // page 4 = accumulator
+        r.c.encoderTurn(0, 2, r.t);   // Amt +2
+        r.c.encoderTurn(1, 2, r.t);   // Mode -> Pendulum
+        r.press(Btn::Page);           // page 5
+        r.c.encoderTurn(0, 1, r.t);   // target Step
+        r.c.padUp(0, 7, r.t); r.t += 400;
+        auto& st = r.tr0().steps[0];
+        CCHECK(st.accAmt == 2 && st.accMode == 2 && st.accTarget == 1);
+        r.p->seqs[3].mode = Mode::Chord;
+        r.hold(Btn::Shift); r.c.encoderTurn(2, -1, r.t); r.release(Btn::Shift);
+        CCHECK(r.p->seqs[0].harm == 3);
+        r.hold(Btn::Shift); r.c.encoderTurn(3, 1, r.t); r.release(Btn::Shift);
+        CCHECK(r.p->seqs[0].harm == 4);
+        Frame f; r.c.render(f, r.t);
+        CCHECK(f.line2.rfind("HARMON", 0) == 0);
+        r.hold(Btn::Shift); r.c.encoderTurn(2, 1, r.t); r.release(Btn::Shift);
+        CCHECK(r.p->seqs[0].harm == -1);
+    }
     return cfail;
 }

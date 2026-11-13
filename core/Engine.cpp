@@ -68,6 +68,7 @@ void Engine::initTrack(int s, int t, double ppq) {
     double L = trackStepLength(s, t);
     r.matActive = 0.0; r.matHold = 0; r.matAccum = 0; r.matTicks = 0; r.lastNote = -1; r.domNote = -1; r.domNoteUi = -1;
     r.laneCnt.fill(-1); for (auto& lp : r.lanePos) lp.store(0);
+    r.accVal.fill(0); r.accDir.fill(1);
     int64_t idx = (int64_t) std::ceil(ppq / L - 1e-7);
     r.nextIdx = idx;
     r.nextGrid = idx * L;
@@ -138,6 +139,66 @@ bool Engine::evalTrig(const Step& st, TrackRt& r, int len) {
     bool isCondition = !(t.type == TrigType::Prob && t.a >= 100) && t.type != TrigType::Fixed && t.type != TrigType::Locked;
     if (isCondition) r.lastTrig = res;
     return res;
+}
+
+// ---------------------------------------------------------------- accumulator (manual 6.13)
+// Returns the accumulated interval to play now; when `advance` is set the value moves on for next time.
+int Engine::accNext(const Step& st, const Track& tr, TrackRt& r, int idx, bool advance) {
+    if (st.accAmt == 0 || idx < 0 || idx >= kMaxSteps) return 0;
+    const int cur = r.accVal[(size_t) idx];
+    if (!advance) return cur;
+    const bool pass = st.accProb >= 100 || (int) (rand32() % 100) < st.accProb;
+    if (!pass) return st.accPctMode == 0 ? 0 : cur; // Ignore: original note, Skip: last value without advancing
+    const int mx = tr.accTrackMode ? tr.accMax : st.accMax;
+    const int mn = tr.accTrackMode ? tr.accMin : st.accMin;
+    int v = cur, d = r.accDir[(size_t) idx] == 0 ? 1 : r.accDir[(size_t) idx];
+    switch (st.accMode) {
+        case 0: { v += st.accAmt; const int range = mx - mn + 1; while (v > mx) v -= range; while (v < mn) v += range; break; }
+        case 1: v += st.accAmt; if (v > mx) v = mn; if (v < mn) v = mx; break;
+        case 2: v += st.accAmt * d;
+                if (v > mx) { v = mx - (v - mx); d = -d; }
+                if (v < mn) { v = mn + (mn - v); d = -d; }
+                v = std::clamp(v, mn, mx); break;
+        default: v = std::clamp(v + st.accAmt, mn, mx); break;
+    }
+    r.accVal[(size_t) idx] = (int8_t) v;
+    r.accDir[(size_t) idx] = (int8_t) d;
+    return cur;
+}
+
+// ---------------------------------------------------------------- harmonizer (manual 6.15)
+void Engine::recordHarm(int s, const int* notes, int n) {
+    n = std::min(n, 8);
+    for (int i = 0; i < n; ++i) harmNotes[(size_t) s][(size_t) i] = notes[i];
+    harmCount[(size_t) s] = n;
+}
+
+// Pitch for a scale degree; followers of a harmonizer leader map degrees onto the leader's current chord.
+int Engine::degPitch(const Sequencer& q, int s, int base, int degree) const {
+    if (q.harm >= 0 && q.harm != s) {
+        int pcs[8], n = 0;
+        const int cnt = harmCount[(size_t) q.harm];
+        for (int i = 0; i < cnt; ++i) {
+            int pc = ((harmNotes[(size_t) q.harm][(size_t) i] % 12) + 12) % 12;
+            if (std::find(pcs, pcs + n, pc) == pcs + n) pcs[n++] = pc;
+        }
+        if (n == 0) { pcs[0] = 0; pcs[1] = 4; pcs[2] = 7; n = 3; } // until the leader plays: C major
+        std::sort(pcs, pcs + n);
+        int oct = degree >= 0 ? degree / n : -((-degree + n - 1) / n);
+        int k = degree - oct * n;
+        return (base / 12) * 12 + pcs[k] + 12 * oct;
+    }
+    return base + degreeToSemis(q.scale, degree);
+}
+
+// Channel multiplex: channels by pitch rank among voices [first, first + n)
+template <typename V> void Engine::assignChMx(const Sequencer& q, V* voices, int first, int n) const {
+    if (q.chMx == 0 || n <= 0) return;
+    for (int i = first; i < first + n; ++i) {
+        int rank = 0;
+        for (int j = first; j < first + n; ++j) if (voices[j].note < voices[i].note || (voices[j].note == voices[i].note && j < i)) ++rank;
+        voices[i].ch = chMxChannel(q.channel, q.chMx, rank, n);
+    }
 }
 
 void Engine::scheduleStep(int s, int t, double grid, double L, double bpm) {
@@ -223,19 +284,25 @@ void Engine::scheduleStep(int s, int t, double grid, double L, double bpm) {
                 out[n++] = {std::clamp(base + chordRootSemis(q.scale, st.notes[0] + degShift) - 12, 0, 127), bch, 0.0};
             }
             const double strumStep = std::abs(st.strum) / 100.0 * L / std::max(1, m);
+            const int first = n;
+            int rec[kMaxChordNotes];
             for (int k = 0; k < m; ++k) {
-                uint8_t c = q.chMx ? (uint8_t) ((q.channel + k) % 16) : q.channel;
                 double d = (st.strum >= 0 ? k : (m - 1 - k)) * strumStep;
-                out[n++] = {std::clamp(base + semis[k], 0, 127), c, d};
+                out[n++] = {std::clamp(base + semis[k], 0, 127), q.channel, d};
+                rec[k] = base + semis[k];
             }
+            assignChMx(q, out, first, m);
+            if (degShift == 0) recordHarm(s, rec, m);
         } else {
             int basePitch = q.mode == Mode::Multi ? (int) tr.baseNote : q.baseMidi();
+            int rec[kMaxPolyNotes];
             for (int k = 0; k < nNotes; ++k) {
                 int deg = st.notes[(size_t) k] + degShift;
-                int note = std::clamp(basePitch + degreeToSemis(q.scale, deg) + st.octave * 12 + transposeOffset[(size_t) s], 0, 127);
-                uint8_t c = (q.mode == Mode::Poly && q.chMx) ? (uint8_t) ((q.channel + k) % 16) : ch;
-                out[n++] = {note, c, 0.0};
+                int note = std::clamp(degPitch(q, s, basePitch, deg) + st.octave * 12 + transposeOffset[(size_t) s], 0, 127);
+                out[n++] = {note, ch, 0.0};
+                rec[k] = note;
             }
+            if (q.mode == Mode::Poly) { assignChMx(q, out, 0, n); if (degShift == 0 && q.harm < 0) recordHarm(s, rec, n); }
         }
         return n;
     };
@@ -245,8 +312,11 @@ void Engine::scheduleStep(int s, int t, double grid, double L, double bpm) {
         push({on + vc.delay, 0, vc.ch, (uint8_t) vc.note, (uint8_t) vv, (uint8_t) s, (uint8_t) t, 0});
         push({on + vc.delay + length, 1, vc.ch, (uint8_t) vc.note, 0, (uint8_t) s, (uint8_t) t, 0});
     };
+    // accumulator (mono / poly): target All = step + every repeat, Step = once per trigger, Repeats = repeats only
+    const bool accOn = st.accAmt != 0 && (q.mode == Mode::Mono || q.mode == Mode::Poly);
+    const int stepAcc = accOn ? accNext(st, tr, r, pos, st.accTarget != 2) : 0;
     Voice voices[kMaxChordNotes + 2];
-    const int nv = buildVoices(0, voices);
+    const int nv = buildVoices(stepAcc, voices);
 
     if (st.repeats > 1) {
         const int n = st.repeats;
@@ -258,9 +328,11 @@ void Engine::scheduleStep(int s, int t, double grid, double L, double bpm) {
             if (i > 0 && st.repProb < 100 && (int) (rand32() % 100) >= st.repProb) { tpos += d; d *= f; continue; }
             double v = vel * (1.0 + st.ramp / 100.0 * (n > 1 ? (double) i / (n - 1) : 0.0));
             double length = std::max(0.002, std::min(dur, d * 0.9));
-            if (i > 0 && st.rng > 0) {
+            const bool accRep = accOn && i > 0 && st.accTarget != 1;
+            if (i > 0 && (st.rng > 0 || accRep)) {
                 Voice rv[kMaxChordNotes + 2];
-                int shift = (int) (rand32() % (uint32_t) (2 * st.rng + 1)) - st.rng;
+                int shift = st.rng > 0 ? (int) (rand32() % (uint32_t) (2 * st.rng + 1)) - st.rng : 0;
+                shift += accRep ? accNext(st, tr, r, pos, true) : stepAcc;
                 int rn = buildVoices(shift, rv);
                 for (int k = 0; k < rn; ++k) addVoice(tpos, length, rv[k], v);
             } else
@@ -412,7 +484,7 @@ void Engine::playMatriceal(int s, int t, double grid, double L, double bpm) {
     r.matHoldType = ptype;
     if (rep == 0) return; // "skip"
 
-    const int midi = std::clamp((int) mt.baseNote + degreeToSemis(q.scale, note + r.matAccum) + 12 * oct + transposeOffset[(size_t) s], 0, 127);
+    const int midi = std::clamp(degPitch(q, s, (int) mt.baseNote, note + r.matAccum) + 12 * oct + transposeOffset[(size_t) s], 0, 127);
     double dur = gate >= 101 ? L * puls * 0.98 : gate == 100 ? L * 1.03 : gate / 100.0 * L;
     if (ptype == 2) dur = L * puls * 0.98;
     r.lastNote = midi; r.lastVel = vel; r.lastCh = mt.channel; r.lastDur = std::min(dur, L * 0.95);
@@ -461,11 +533,14 @@ void Engine::playDomino(int s, double grid, double L, double bpm) {
         else if (ns.gate >= kGateLegato) dur = d * 1.03;
         else dur = std::max(0.002, ns.gate / 100.0 * std::min(d, L));
         const int voices = q.voice == 0 ? 1 : std::min<int>(ns.numNotes, 4);
+        const int acc = accNext(ns, noteT, r, npos, true);
+        struct V { int note; uint8_t ch; } vs[4];
+        for (int k = 0; k < voices; ++k)
+            vs[k] = {std::clamp(degPitch(q, s, q.baseMidi(), ns.notes[(size_t) k] + acc) + ns.octave * 12 + transposeOffset[(size_t) s], 0, 127), q.channel};
+        assignChMx(q, vs, 0, voices);
         for (int k = 0; k < voices; ++k) {
-            int note = std::clamp(q.baseMidi() + degreeToSemis(q.scale, ns.notes[(size_t) k]) + ns.octave * 12 + transposeOffset[(size_t) s], 0, 127);
-            uint8_t ch = q.chMx ? (uint8_t) ((q.channel + k) % 16) : q.channel;
-            push({on, 0, ch, (uint8_t) note, (uint8_t) std::clamp((int) ns.velocity, 1, 127), (uint8_t) s, 0, 0});
-            push({on + dur, 1, ch, (uint8_t) note, 0, (uint8_t) s, 0, 0});
+            push({on, 0, vs[k].ch, (uint8_t) vs[k].note, (uint8_t) std::clamp((int) ns.velocity, 1, 127), (uint8_t) s, 0, 0});
+            push({on + dur, 1, vs[k].ch, (uint8_t) vs[k].note, 0, (uint8_t) s, 0, 0});
         }
     }
 }
@@ -511,16 +586,20 @@ void Engine::playSaga(int s, double grid, double L, double bpm) {
     const int voices = q.voice == 0 ? 1 : std::min<int>(st.numNotes, kMaxPolyNotes);
     const int reps = std::max<int>(1, st.repeats);
     const double rd = std::max<int>(1, st.repDur) * L / reps;
+    const int stepAcc = accNext(st, tr, r, pos, st.accTarget != 2);
     for (int i = 0; i < reps; ++i) {
         if (i > 0 && st.repProb < 100 && (int) (rand32() % 100) >= st.repProb) continue;
-        int shift = (st.rng > 0) ? (int) (rand32() % (uint32_t) (2 * st.rng + 1)) - st.rng : 0;
+        int shift = (st.rng > 0 && i > 0) ? (int) (rand32() % (uint32_t) (2 * st.rng + 1)) - st.rng : 0;
+        shift += (i > 0 && st.accTarget != 1 && st.accAmt != 0) ? accNext(st, tr, r, pos, true) : stepAcc;
         double on = time + i * rd;
         double len = reps > 1 ? std::min(dur, rd * 0.9) : dur;
+        struct V { int note; uint8_t ch; } vs[kMaxPolyNotes];
+        for (int v = 0; v < voices; ++v)
+            vs[v] = {std::clamp(degPitch(q, s, q.baseMidi(), st.notes[(size_t) v] + shift) + st.octave * 12 + transposeOffset[(size_t) s], 0, 127), q.channel};
+        assignChMx(q, vs, 0, voices);
         for (int v = 0; v < voices; ++v) {
-            int note = std::clamp(q.baseMidi() + degreeToSemis(q.scale, st.notes[(size_t) v] + shift) + st.octave * 12 + transposeOffset[(size_t) s], 0, 127);
-            uint8_t ch = q.chMx ? (uint8_t) ((q.channel + v) % 16) : q.channel;
-            push({on, 0, ch, (uint8_t) note, (uint8_t) std::clamp((int) st.velocity, 1, 127), (uint8_t) s, 0, 0});
-            push({on + len, 1, ch, (uint8_t) note, 0, (uint8_t) s, 0, 0});
+            push({on, 0, vs[v].ch, (uint8_t) vs[v].note, (uint8_t) std::clamp((int) st.velocity, 1, 127), (uint8_t) s, 0, 0});
+            push({on + len, 1, vs[v].ch, (uint8_t) vs[v].note, 0, (uint8_t) s, 0, 0});
         }
     }
 }

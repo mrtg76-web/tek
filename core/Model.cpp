@@ -132,6 +132,22 @@ void Project::reset() {
     output = OutputMode::Both;
 }
 
+std::string chMxLabel(int v) {
+    if (v <= 0) return "Off";
+    if (v <= 7) return std::to_string(v + 1) + " Lo";
+    return std::to_string(v - 6) + " Hi";
+}
+const char* accModeLabel(int v) {
+    static const char* l[] = {"Wrap", "Clip", "Pend", "Hold"};
+    return l[std::clamp(v, 0, 3)];
+}
+uint8_t chMxChannel(int base, int chMx, int rankLow, int count) {
+    if (chMx <= 0) return (uint8_t) base;
+    int span = chMx <= 7 ? chMx + 1 : chMx - 6;
+    int rank = chMx <= 7 ? rankLow : count - 1 - rankLow;
+    return (uint8_t) ((base + rank % span) % 16);
+}
+
 const char* punchInLabel(int v) {
     static const char* l[] = {"Glob","OFF","P.End","Beat","1/2B","Bar","2Bar","4Bar","8Bar"};
     return (v >= 0 && v < 9) ? l[v] : "?";
@@ -199,7 +215,8 @@ static bool stepIsDefault(const Step& s) {
     return !s.active && !s.muted && s.numNotes == 0 && s.velocity == d.velocity && s.octave == 0 && s.gate == d.gate
         && s.tie == 0 && s.trig == d.trig && s.repeats == 1 && s.repDur == 1 && s.ramp == 0 && s.accel == 0
         && s.retrig == 1 && s.offset == 0 && s.rng == 0 && s.repProb == 100 && s.velLocked == 0
-        && s.chordType == 0 && s.voicing == 0 && s.spread == 0 && s.strum == 0 && s.dur == 1;
+        && s.chordType == 0 && s.voicing == 0 && s.spread == 0 && s.strum == 0 && s.dur == 1
+        && s.accAmt == 0 && s.accMode == 0 && s.accMax == 7 && s.accMin == 0 && s.accTarget == 0 && s.accPctMode == 0 && s.accProb == 100;
 }
 
 std::string serialize(const Project& p) {
@@ -214,7 +231,7 @@ std::string serialize(const Project& p) {
           << (int) q.nudgeMs << ' ' << (int) q.timeBend << ' ' << (int) q.active << ' ' << (int) q.muted << ' '
           << (int) q.curPattern << ' ' << (int) q.groove << ' ' << q.grooveAccent << ' ' << q.grooveTime << ' '
           << (int) q.grooveOffset << ' ' << (int) q.grooveLen << ' ' << (int) q.grooveRand << '\n';
-        o << "SQ2 " << s << ' ' << (int) q.bassMode << ' ' << (int) q.chMx << ' ' << (int) q.voice << '\n';
+        o << "SQ2 " << s << ' ' << (int) q.bassMode << ' ' << (int) q.chMx << ' ' << (int) q.voice << ' ' << (int) q.harm << '\n';
         for (int pi = 0; pi < kNumPatterns; ++pi) {
             const auto& pat = q.patterns[(size_t) pi];
             o << "PAT " << s << ' ' << pi << ' ' << (int) pat.swing << '\n';
@@ -269,6 +286,7 @@ std::string serialize(const Project& p) {
                   << (int) tr.div << ' ' << (int) tr.rndDiv << ' ' << (int) tr.channel << ' ' << (int) tr.baseNote << ' '
                   << (int) tr.swing << ' ' << (int) tr.muted << ' ' << (int) tr.defVel << ' ' << (int) tr.defGate << ' '
                   << (int) tr.defRepeats << '\n';
+                if (tr.accTrackMode || tr.accMax != 7 || tr.accMin) o << "TA " << s << ' ' << pi << ' ' << t << ' ' << (int) tr.accTrackMode << ' ' << (int) tr.accMax << ' ' << (int) tr.accMin << '\n';
                 for (int i = 0; i < kMaxSteps; ++i) {
                     const auto& st = tr.steps[(size_t) i];
                     if (stepIsDefault(st)) continue;
@@ -277,6 +295,9 @@ std::string serialize(const Project& p) {
                         o << "SC " << s << ' ' << pi << ' ' << t << ' ' << i << ' ' << (int) st.chordType << ' ' << (int) st.voicing
                           << ' ' << (int) st.spread << ' ' << (int) st.strum << '\n';
                     if (st.dur != 1) o << "SD " << s << ' ' << pi << ' ' << t << ' ' << i << ' ' << (int) st.dur << '\n';
+                    if (st.accAmt || st.accMode || st.accMax != 7 || st.accMin || st.accTarget || st.accPctMode || st.accProb != 100)
+                        o << "SA " << s << ' ' << pi << ' ' << t << ' ' << i << ' ' << (int) st.accAmt << ' ' << (int) st.accMode << ' ' << (int) st.accMax
+                          << ' ' << (int) st.accMin << ' ' << (int) st.accTarget << ' ' << (int) st.accPctMode << ' ' << (int) st.accProb << '\n';
                 }
             }
         }
@@ -337,8 +358,21 @@ bool deserialize(const std::string& str, Project& p) {
         } else if (tag == "SQ2" && v.size() >= 3) {
             int s = at(0); if (s < 0 || s >= kNumSeqs) continue;
             p.seqs[(size_t) s].bassMode = clampv<uint8_t>(at(1), 0, 17);
-            p.seqs[(size_t) s].chMx = clampv<uint8_t>(at(2), 0, 1);
+            p.seqs[(size_t) s].chMx = clampv<uint8_t>(at(2), 0, 14);
             if (v.size() >= 4) p.seqs[(size_t) s].voice = clampv<uint8_t>(at(3), 0, 1);
+            if (v.size() >= 5) p.seqs[(size_t) s].harm = clampv<int8_t>(at(4), -1, 7);
+        } else if (tag == "SA" && v.size() >= 11) {
+            int s = at(0), pi = at(1), t = at(2), i = at(3);
+            if (s < 0 || s >= kNumSeqs || pi < 0 || pi >= kNumPatterns || t < 0 || t >= kNumTracks || i < 0 || i >= kMaxSteps) continue;
+            auto& st = p.seqs[(size_t) s].patterns[(size_t) pi].tracks[(size_t) t].steps[(size_t) i];
+            st.accAmt = clampv<int8_t>(at(4), -24, 24); st.accMode = clampv<uint8_t>(at(5), 0, 3);
+            st.accMax = clampv<int8_t>(at(6), 0, 24); st.accMin = clampv<int8_t>(at(7), -24, 0);
+            st.accTarget = clampv<uint8_t>(at(8), 0, 2); st.accPctMode = clampv<uint8_t>(at(9), 0, 1); st.accProb = clampv<uint8_t>(at(10), 0, 100);
+        } else if (tag == "TA" && v.size() >= 6) {
+            int s = at(0), pi = at(1), t = at(2);
+            if (s < 0 || s >= kNumSeqs || pi < 0 || pi >= kNumPatterns || t < 0 || t >= kNumTracks) continue;
+            auto& tr = p.seqs[(size_t) s].patterns[(size_t) pi].tracks[(size_t) t];
+            tr.accTrackMode = clampv<uint8_t>(at(3), 0, 1); tr.accMax = clampv<int8_t>(at(4), 0, 24); tr.accMin = clampv<int8_t>(at(5), -24, 0);
         } else if (tag == "SD" && v.size() >= 5) {
             int s = at(0), pi = at(1), t = at(2), i = at(3);
             if (s < 0 || s >= kNumSeqs || pi < 0 || pi >= kNumPatterns || t < 0 || t >= kNumTracks || i < 0 || i >= kMaxSteps) continue;

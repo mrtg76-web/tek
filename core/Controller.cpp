@@ -732,11 +732,11 @@ void Controller::domKnob(int knob, int delta, double nowMs) {
                 if (knob == 1) st.rng = clampT<int8_t>(st.rng + delta, 0, 24);
                 if (knob == 2) st.trig = trigFromListIndex(trigToListIndex(st.trig) + delta);
                 if (knob == 3) st.repeats = clampT<uint8_t>(st.repeats + delta, 1, 15);
-            } else {
+            } else if (stepPage == 2) {
                 if (knob == 0) st.repDur = clampT<uint8_t>(st.repDur + delta, 1, 15);
                 if (knob == 1) st.repProb = clampT<uint8_t>(st.repProb + delta * 5, 0, 100);
                 if (knob == 2) st.octave = clampT<int8_t>(st.octave + delta, -4, 4);
-            }
+            } else editAcc(st, stepPage - 3, knob, delta);
         }
         return;
     }
@@ -751,10 +751,10 @@ void Controller::domKnob(int knob, int delta, double nowMs) {
                 if (knob == 1) for (int i = 0; i < st.numNotes; ++i) st.notes[(size_t) i] = clampT<int8_t>(st.notes[(size_t) i] + delta, -60, 60);
                 if (knob == 2) st.gate = clampT<uint8_t>(st.gate + delta, 2, kGateLegato);
                 if (knob == 3) st.trig = trigFromListIndex(std::min(trigToListIndex(st.trig) + delta, 20)); // probability
-            } else {
+            } else if (stepPage == 1) {
                 if (knob == 0) st.offset = clampT<int8_t>(st.offset + delta, 0, 45);
                 if (knob == 1) st.octave = clampT<int8_t>(st.octave + delta, -4, 4);
-            }
+            } else editAcc(st, stepPage - 2, knob, delta);
         } else {
             auto& st = pat.tracks[1].steps[(size_t) ((h.y - 2) * 16 + h.x)];
             if (!st.active) continue;
@@ -838,8 +838,11 @@ void Controller::renderDominoDisplay(Frame& f) const {
         std::string nm = st.active && st.numNotes ? noteName(q.baseMidi() + degreeToSemis(q.scale, st.notes[0]) + st.octave * 12) + (st.numNotes > 1 ? "+" + std::to_string(st.numNotes - 1) : "") : "-";
         f.line1 = "Stp " + std::to_string(idx + 1) + " " + nm + "  " + std::to_string(stepPage + 1) + "/2";
         f.line2 = st.active ? "hold + keyboard key: add/remove note" : "hold + keyboard key: set note";
+        f.line1 = "Stp " + std::to_string(idx + 1) + " " + nm + "  " + std::to_string(stepPage + 1) + "/4";
         if (stepPage == 0) set("Vel", std::to_string(st.velocity), "Note", nm, "Gate", st.gate >= kGateLegato ? "LEG" : std::to_string(st.gate), "Trig", trigLabel(st.trig));
-        else set("Offst", std::to_string(st.offset) + "%", "Oct", std::to_string(st.octave), "-", "", "-", "");
+        else if (stepPage == 1) set("Offst", std::to_string(st.offset) + "%", "Oct", std::to_string(st.octave), "-", "", "-", "");
+        else if (stepPage == 2) set("Amt", (st.accAmt > 0 ? "+" : "") + std::to_string(st.accAmt) + "iv", "Mode", accModeLabel(st.accMode), "Acml+", "+" + std::to_string(st.accMax), "Acml-", std::to_string(st.accMin));
+        else { static const char* tg[3] = {"All", "Step", "Rept"}; set("Trig", tg[st.accTarget], "%Mde", st.accPctMode ? "Skip" : "Ignor", "Acm%", std::to_string(st.accProb) + "%", "-", ""); }
     } else {
         const int idx = (h->y - 2) * 16 + h->x;
         const auto& st = trigT.steps[(size_t) idx];
@@ -885,11 +888,13 @@ void Controller::renderSagaDisplay(Frame& f) const {
     const int idx = h->y * 16 + h->x;
     const auto& st = tr.steps[(size_t) idx];
     std::string nm = st.numNotes ? noteName(q.baseMidi() + degreeToSemis(q.scale, st.notes[0]) + st.octave * 12) + (st.numNotes > 1 ? "+" + std::to_string(st.numNotes - 1) : "") : "-";
-    f.line1 = "Stg" + std::to_string(idx + 1) + "  T.Durat:" + std::to_string(total) + "  " + std::to_string(stepPage + 1) + "/3";
+    f.line1 = "Stg" + std::to_string(idx + 1) + "  T.Durat:" + std::to_string(total) + "  " + std::to_string(stepPage + 1) + "/5";
     f.line2 = st.active ? "hold + key: add/remove note" : "inactive stage (tap to activate)";
     if (stepPage == 0) set("Vel", std::to_string(st.velocity), "Note", nm, "Gate", st.gate >= kGateLegato ? "LEG" : std::to_string(st.gate) + "%", "Durat", std::to_string(st.dur));
     else if (stepPage == 1) set("Offst", std::to_string(st.offset) + "%", "Rng", std::to_string(st.rng) + "iv", "Trig", trigLabel(st.trig), "Rept", std::to_string(st.repeats));
-    else set("RDur", "x" + std::to_string(st.repDur), "Rpt%", std::to_string(st.repProb), "Oct", std::to_string(st.octave), "-", "");
+    else if (stepPage == 2) set("RDur", "x" + std::to_string(st.repDur), "Rpt%", std::to_string(st.repProb), "Oct", std::to_string(st.octave), "-", "");
+    else if (stepPage == 3) set("Amt", (st.accAmt > 0 ? "+" : "") + std::to_string(st.accAmt) + "iv", "Mode", accModeLabel(st.accMode), "Acml+", "+" + std::to_string(st.accMax), "Acml-", std::to_string(st.accMin));
+    else { static const char* tg[3] = {"All", "Step", "Rept"}; set("Trig", tg[st.accTarget], "%Mde", st.accPctMode ? "Skip" : "Ignor", "Acm%", std::to_string(st.accProb) + "%", "-", ""); }
 }
 
 // ============================================================================ MIDI player (manual 6.12)
@@ -923,6 +928,22 @@ void Controller::renderPlayer(Frame& f) const {
         for (int y = 0; y < 8; ++y) { auto& c = f.pads[(size_t) (y * 16 + px)]; c = c ? mix(c, 0xffffff, 0.5f) : 0x4a4d53; }
     }
 }
+
+// ============================================================================ accumulator / harmonizer helpers
+void Controller::editAcc(Step& st, int page, int knob, int delta) {
+    if (page == 0) {
+        if (knob == 0) st.accAmt = clampT<int8_t>(st.accAmt + delta, -24, 24);
+        if (knob == 1) st.accMode = clampT<uint8_t>(st.accMode + delta, 0, 3);
+        if (knob == 2) st.accMax = clampT<int8_t>(st.accMax + delta, 0, 24);
+        if (knob == 3) st.accMin = clampT<int8_t>(st.accMin + delta, -24, 0);
+    } else {
+        if (knob == 0) st.accTarget = clampT<uint8_t>(st.accTarget + delta, 0, 2);
+        if (knob == 1) st.accPctMode = clampT<uint8_t>(st.accPctMode + delta, 0, 1);
+        if (knob == 2) st.accProb = clampT<uint8_t>(st.accProb + delta * 5, 0, 100);
+    }
+}
+std::string Controller::scaleText() const { return seq().harm >= 0 ? std::string("HARMON") : std::string(scaleLibrary()[seq().scale].label); }
+std::string Controller::rootText() const { return seq().harm >= 0 ? "Sq" + std::to_string(seq().harm + 1) + " " + noteName(seq().baseOctave * 12 + 24) : noteName(seq().baseMidi()); }
 
 // ============================================================================ encoders
 void Controller::relative(uint8_t Step::*field, int delta, int lo, int hi, const char* name, double nowMs) {
@@ -993,6 +1014,8 @@ void Controller::editHeldSteps(int knob, int delta, double nowMs) {
                 case 2: st.rng = clampT<int8_t>(st.rng + delta, 0, 24); break;
                 case 3: st.repProb = clampT<uint8_t>(st.repProb + delta * 5, 0, 100); break;
             }
+        } else if (stepPage >= 3 && !isChord()) {
+            editAcc(st, stepPage - 3, knob, delta);
         } else { // page 4 (chord): spread, type, voicing
             switch (knob) {
                 case 0: st.spread = clampT<uint8_t>(st.spread + delta, 0, 6); break;
@@ -1044,13 +1067,29 @@ void Controller::editShift(int knob, int delta, double nowMs) {
             if (isMulti() && track().swing != 0) { track().swing = clampT<uint8_t>(track().swing + delta, 10, 90); msg("TRACK SWING " + std::to_string(track().swing), nowMs); }
             else { q.pat().swing = clampT<uint8_t>(q.pat().swing + delta, 10, 90); msg("SWING " + std::to_string(q.pat().swing), nowMs); }
             break;
-        case 2: q.scale = clampT<uint8_t>(q.scale + delta, 0, numScales() - 1); msg(scaleLibrary()[q.scale].label, nowMs); break;
-        case 3: {
+        case 2:
+            if (q.harm >= 0) { if (delta > 0) { q.harm = -1; q.scale = 0; } }
+            else if (q.scale == 0 && delta < 0 && !isPlayer() && !isChord()) { // turning below the first scale selects HARMON
+                int lead = -1;
+                for (int i = 1; i < kNumSeqs && lead < 0; ++i) { int c = (sel + i) % kNumSeqs; if (proj.seqs[(size_t) c].mode == Mode::Chord || proj.seqs[(size_t) c].mode == Mode::Poly) lead = c; }
+                q.harm = (int8_t) (lead >= 0 ? lead : (sel + 1) % kNumSeqs);
+            } else q.scale = clampT<uint8_t>(q.scale + delta, 0, numScales() - 1);
+            msg(scaleText() + (q.harm >= 0 ? " - " + rootText() : ""), nowMs);
+            break;
+        case 3:
+            if (q.harm >= 0) { // root selects the harmonizer leader
+                int h = q.harm;
+                for (int k = 0; k < kNumSeqs; ++k) { h = ((h + (delta > 0 ? 1 : -1)) % kNumSeqs + kNumSeqs) % kNumSeqs; if (h != sel) break; }
+                q.harm = (int8_t) h;
+                msg("HARMON - " + rootText(), nowMs);
+                break;
+            }
+            {
             int midi = std::clamp(q.baseMidi() + delta, 0, 119);
             q.rootPc = (uint8_t) (midi % 12); q.baseOctave = (int8_t) (midi / 12 - 2);
             msg("ROOT " + noteName(q.baseMidi()), nowMs);
+            }
             break;
-        }
     }
 }
 
@@ -1072,7 +1111,7 @@ void Controller::editMenu(int knob, int delta, double nowMs) {
             } else {
                 if (knob == 0) { if (q.mode == Mode::Poly) q.nVoices = clampT<uint8_t>(q.nVoices + delta, 1, 7);
                                  else if (isMulti()) tr.swing = (uint8_t) (tr.swing == 0 ? (delta > 0 ? 10 : 0) : (tr.swing + delta < 10 ? 0 : std::min(90, tr.swing + delta))); }
-                if (knob == 1 && (q.mode == Mode::Poly || q.mode == Mode::Chord || q.mode == Mode::Domino || q.mode == Mode::Saga)) q.chMx = clampT<uint8_t>(q.chMx + delta, 0, 1);
+                if (knob == 1 && (q.mode == Mode::Poly || q.mode == Mode::Chord || q.mode == Mode::Domino || q.mode == Mode::Saga)) q.chMx = clampT<uint8_t>(q.chMx + delta, 0, 14);
                 if (knob == 0 && (q.mode == Mode::Domino || q.mode == Mode::Saga)) q.voice = clampT<uint8_t>(q.voice + delta, 0, 1);
                 if (knob == 3) q.color = clampT<uint8_t>(q.color + delta, 0, 7);
             }
@@ -1103,7 +1142,14 @@ void Controller::editMenu(int knob, int delta, double nowMs) {
             break;
         case Menu::StepM: {
             pushUndo();
-            if (menuPage == 2 && knob == 3) { q.bassMode = clampT<uint8_t>(q.bassMode + delta, 0, 17); break; }
+            if (menuPage == 2 && knob == 3 && isChord()) { q.bassMode = clampT<uint8_t>(q.bassMode + delta, 0, 17); break; }
+            if (menuPage == 2 && !isChord()) { // AcmM page: accumulator limit mode for the track
+                auto& at = noteTrack();
+                if (knob == 0) at.accTrackMode = clampT<uint8_t>(at.accTrackMode + delta, 0, 1);
+                if (knob == 1) at.accMax = clampT<int8_t>(at.accMax + delta, 0, 24);
+                if (knob == 2) at.accMin = clampT<int8_t>(at.accMin + delta, -24, 0);
+                break;
+            }
             for (auto& st : tr.steps) {
                 if (!st.active) continue;
                 if (menuPage == 0) {
@@ -1201,7 +1247,7 @@ void Controller::tapKnob(int knob, double nowMs) {
         auto& q = seq();
         if (knob == 0) { proj.bpm = 120.0; msg("BPM 120", nowMs); }
         if (knob == 1) { pushUndo(); q.pat().swing = 50; msg("SWING 50", nowMs); }
-        if (knob == 2) { q.scale = 0; msg("CHROMATIC", nowMs); }
+        if (knob == 2) { q.scale = 0; q.harm = -1; msg("CHROMATIC", nowMs); }
         if (knob == 3) { q.rootPc = 0; q.baseOctave = 2; msg("ROOT C2", nowMs); }
         return;
     }
@@ -1427,10 +1473,10 @@ void Controller::button(Btn b, bool down, double nowMs) {
             break;
         case Btn::Page:
             if (shift) { expandCondense(true, nowMs); break; }
-            if (!heldPads.empty()) { stepPage = (stepPage + 1) % (isDomino() ? 2 : stepPages()); for (auto& h : heldPads) h.consumed = true; break; }
+            if (!heldPads.empty()) { stepPage = (stepPage + 1) % (isDomino() ? 4 : isSaga() ? 5 : stepPages()); for (auto& h : heldPads) h.consumed = true; break; }
             if (menu == Menu::Setup) menuPage = (menuPage + 1) % 3;
             else if (menu == Menu::TrackM && isMulti()) menuPage = (menuPage + 1) % 2;
-            else if (menu == Menu::StepM) menuPage = (menuPage + 1) % (isChord() ? 3 : 2);
+            else if (menu == Menu::StepM) menuPage = (menuPage + 1) % ((isChord() || hasAcc()) ? 3 : 2);
             else if (menu == Menu::Groove) menuPage = (menuPage + 1) % 2;
             else if (menu == Menu::Nudge) menu = Menu::Bend;
             else if (menu == Menu::Bend) menu = Menu::Nudge;
@@ -1538,7 +1584,7 @@ void Controller::renderDisplay(Frame& f, double nowMs) const {
     if (eng.pendingPattern(sel) >= 0) patTxt += " > " + std::to_string(eng.pendingPattern(sel) + 1);
     if (isMulti()) patTxt += "  T" + std::to_string(trackIndex() + 1);
     f.line1 = patTxt + "   " + divisionLabel(tr.div) + "  " + std::to_string(tr.start + 1) + "-" + std::to_string(tr.end + 1);
-    f.line2 = std::string(scaleLibrary()[q.scale].label) + "  " + noteName(q.baseMidi()) + (q.muted ? "  MUTED" : "");
+    f.line2 = scaleText() + "  " + rootText() + (q.muted ? "  MUTED" : "");
     double ppq = eng.currentPpq();
     f.progress = (int) std::floor(std::fmod(std::max(0.0, ppq), 4.0) * 4.0);
 
@@ -1563,7 +1609,7 @@ void Controller::renderDisplay(Frame& f, double nowMs) const {
             std::string a = q.mode == Mode::Poly ? std::to_string(q.nVoices) : isMulti() ? (tr.swing == 0 ? "Same" : std::to_string(tr.swing)) : "-";
             bool mx = q.mode == Mode::Poly || q.mode == Mode::Chord || hasKeys();
             if (hasKeys()) a = q.voice ? "Poly" : "Mono";
-            set(q.mode == Mode::Poly ? "nVoice" : isMulti() ? "T.Swg" : hasKeys() ? "Voice" : "-", a, mx ? "ChMx" : "-", mx ? (q.chMx ? "On" : "Off") : "", "-", "", "Color", std::to_string(q.color + 1));
+            set(q.mode == Mode::Poly ? "nVoice" : isMulti() ? "T.Swg" : hasKeys() ? "Voice" : "-", a, mx ? "ChMx" : "-", mx ? chMxLabel(q.chMx) : "", "-", "", "Color", std::to_string(q.color + 1));
         }
     } else if (menu == Menu::TrackM) {
         if (isMatr()) {
@@ -1582,12 +1628,13 @@ void Controller::renderDisplay(Frame& f, double nowMs) const {
         const Step* ref = nullptr;
         for (auto& st : tr.steps) if (st.active) { ref = &st; break; }
         Step d; if (!ref) ref = &d;
-        const int pages = isChord() ? 3 : 2;
-        f.line1 = (menuPage == 2 ? std::string("Chord Global  ") : std::string("Step Global  ")) + std::to_string(menuPage + 1) + "/" + std::to_string(pages);
+        const int pages = (isChord() || hasAcc()) ? 3 : 2;
+        f.line1 = (menuPage == 2 ? std::string(isChord() ? "Chord Global  " : "Accumulator  ") : std::string("Step Global  ")) + std::to_string(menuPage + 1) + "/" + std::to_string(pages);
         auto bassTxt = [&]() { return q.bassMode == 0 ? std::string("OFF") : q.bassMode == 1 ? std::string("ON") : "Ch" + std::to_string(q.bassMode - 1); };
         if (menuPage == 0) set("Rept", std::to_string(ref->repeats), "Durat", "x" + std::to_string(ref->repDur), "Ramp", std::to_string(ref->ramp) + "%", "Accel", std::to_string(ref->accel) + "%");
         else if (menuPage == 1) set("Offst", std::to_string(ref->offset) + "%", isChord() ? "Strm" : "Retrg", isChord() ? std::to_string(ref->strum) + "%" : std::to_string(ref->retrig), "Rng", std::to_string(ref->rng) + "iv", "Rpt%", std::to_string(ref->repProb));
-        else set("Sprd", std::to_string(ref->spread), "Type", chordTypeLabel(ref->chordType), "Voic", voicingLabel(ref->voicing), "Bass", bassTxt());
+        else if (isChord()) set("Sprd", std::to_string(ref->spread), "Type", chordTypeLabel(ref->chordType), "Voic", voicingLabel(ref->voicing), "Bass", bassTxt());
+        else { const auto& at = noteTrack(); set("AcmM", at.accTrackMode ? "Trck" : "Step", "Acml+", "+" + std::to_string(at.accMax), "Acml-", std::to_string(at.accMin), "-", ""); }
     } else if (menu == Menu::Nudge || menu == Menu::Bend) {
         f.line1 = menu == Menu::Nudge ? "Time Offset [ms]" : "Time Bend [%]";
         f.line2 = "Tap knob: SQ1-4 / SQ5-8   Shift: all";
@@ -1615,10 +1662,12 @@ void Controller::renderDisplay(Frame& f, double nowMs) const {
             set("Vel", vel, isMulti() ? "Note" : "Oct", oct, "Gate", st.gate >= kGateLegato ? "LEG" : std::to_string(st.gate), "Trig", trigLabel(st.trig));
         } else if (stepPage == 1) set("Rept", std::to_string(st.repeats), "Durat", "x" + std::to_string(st.repDur), "Ramp", std::to_string(st.ramp) + "%", "Accel", std::to_string(st.accel) + "%");
         else if (stepPage == 2) set("Offst", std::to_string(st.offset) + "%", isChord() ? "Strm" : "Retrg", isChord() ? std::to_string(st.strum) + "%" : std::to_string(st.retrig), "Rng", std::to_string(st.rng) + "iv", "Rpt%", std::to_string(st.repProb));
-        else set("Sprd", std::to_string(st.spread), "Type", chordTypeLabel(st.chordType), "Voicing", voicingLabel(st.voicing), "-", "");
+        else if (isChord()) set("Sprd", std::to_string(st.spread), "Type", chordTypeLabel(st.chordType), "Voicing", voicingLabel(st.voicing), "-", "");
+        else if (stepPage == 3) set("Amt", (st.accAmt > 0 ? "+" : "") + std::to_string(st.accAmt) + "iv", "Mode", accModeLabel(st.accMode), "Acml+", "+" + std::to_string(htr.accTrackMode ? htr.accMax : st.accMax), "Acml-", std::to_string(htr.accTrackMode ? htr.accMin : st.accMin));
+        else { static const char* tg[3] = {"All", "Step", "Rept"}; set("Trig", tg[st.accTarget], "%Mde", st.accPctMode ? "Skip" : "Ignor", "Acm%", std::to_string(st.accProb) + "%", "-", ""); }
     } else if (held(Btn::Shift)) {
         set("BPM", proj.internalClock ? std::to_string((int) proj.bpm) : "HOST", "SWNG", std::to_string(isMulti() && tr.swing ? tr.swing : q.pat().swing),
-            "SCAL", scaleLibrary()[q.scale].label, "ROOT", noteName(q.baseMidi()));
+            "SCAL", scaleText(), "ROOT", rootText());
     } else {
         std::string k2 = lanesView() ? "NOTE" : (scrollMode || isMulti()) ? "VIEW" : "OCT";
         std::string v2 = lanesView() ? noteName(tr.baseNote) : (scrollMode || isMulti()) ? std::to_string(viewDegC()) : noteName(q.baseMidi());

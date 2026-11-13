@@ -86,6 +86,14 @@ struct Step {
     uint8_t spread = 0;      // 0..6 extra upper-octave tones
     int8_t strum = 0;        // -100..100 %
     uint8_t dur = 1;         // saga: stage duration in steps (1..32)
+    // accumulator (manual 6.13): pitch evolves each time the step plays
+    int8_t accAmt = 0;       // -24..24 scale intervals per trigger (0 = off)
+    uint8_t accMode = 0;     // 0 Wrap, 1 Clip, 2 Pendulum, 3 Hold
+    int8_t accMax = 7;       // 0..24  (step mode limits)
+    int8_t accMin = 0;       // -24..0
+    uint8_t accTarget = 0;   // 0 All (step + repeats), 1 Step, 2 Repeats
+    uint8_t accPctMode = 0;  // 0 Ignore, 1 Skip (when the probability fails)
+    uint8_t accProb = 100;   // probability the accumulator advances
 
     bool hasNote(int degree) const {
         for (int i = 0; i < numNotes; ++i) if (notes[(size_t) i] == degree) return true;
@@ -107,6 +115,8 @@ struct Track {
     bool muted = false;
     // defaults used when placing new steps (lower bound of the global range)
     uint8_t defVel = 75, defGate = 50, defRepeats = 1;
+    uint8_t accTrackMode = 0;      // AcmM: 0 Step (limits per step), 1 Trck (limits below for every step)
+    int8_t accMax = 7, accMin = 0;
     int length() const { return (int) end - (int) start + 1; }
 };
 
@@ -195,7 +205,8 @@ struct Sequencer {
     int8_t nudgeMs = 0;            // -100..100 ms
     int8_t timeBend = 0;           // -120..120 = -12.0..+12.0 %
     uint8_t bassMode = 0;          // chord mode bass note: 0 Off, 1 On (same channel), 2..17 = channel 1..16
-    uint8_t chMx = 0;              // channel multiplex: 0 Off, 1 On (voice n -> channel + n)
+    uint8_t chMx = 0;              // channel multiplex: 0 Off, 1..7 = 2..8 Lo, 8..14 = 2..8 Hi (manual 6.14)
+    int8_t harm = -1;              // harmonizer: -1 off, 0..7 = leader sequencer (scale shown as HARMON)
     uint8_t voice = 1;             // domino: 0 Mono, 1 Poly (tracks[0] = 32 note steps, tracks[1] = 64 trigger steps)
     bool active = true;            // inactive = transport stopped for this seq
     bool muted = false;            // muted = runs but silent
@@ -238,6 +249,10 @@ std::string serialize(const Project& p);
 bool deserialize(const std::string& s, Project& p);
 
 const char* punchInLabel(int v);
+std::string chMxLabel(int v);
+const char* accModeLabel(int v);
+// MIDI channel for the voice with pitch rank `rankLow` (0 = lowest) of `count` voices
+uint8_t chMxChannel(int base, int chMx, int rankLow, int count);
 uint32_t seqColor(int paletteIndex); // 0xRRGGBB
 
 } // namespace tek
