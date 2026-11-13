@@ -164,6 +164,7 @@ void Engine::scheduleStep(int s, int t, double grid, double L, double bpm) {
     const int64_t counter = r.counter;
     r.counter++;
     r.sinceStart++;
+    if (q.mode == Mode::Stoch) { playStoch(s, pos, grid, L, bpm, parity, counter); return; }
     if (!st.active || st.numNotes == 0) return;
 
     bool fire = evalTrig(st, r, len);
@@ -265,6 +266,70 @@ void Engine::scheduleStep(int s, int t, double grid, double L, double bpm) {
     } else {
         for (int k = 0; k < nv; ++k) addVoice(time, dur, voices[k], vel);
     }
+}
+
+// ---------------------------------------------------------------- stochastic mode (manual 6.8)
+void Engine::regenStoch(Stochastic& sc, const Track& tr, int i, bool pitch, bool rhythm) {
+    if (pitch) {
+        int total = 0;
+        for (auto l : sc.noteLevel) total += l;
+        int pick = 0;
+        if (total > 0) {
+            int x = (int) (rand32() % (uint32_t) total);
+            for (int k = 0; k < 12; ++k) { x -= sc.noteLevel[(size_t) k]; if (x < 0) { pick = k; break; } }
+        }
+        int span = sc.octUp + sc.octDown + 1;
+        int oct = (int) (rand32() % (uint32_t) span) - sc.octDown;
+        sc.pitch[(size_t) i] = (int8_t) (pick + 12 * oct);
+    }
+    if (rhythm) {
+        static const uint8_t codes[8] = {24, 22, 1, 2, 3, 4, 6, 8}; // long -> short
+        int a = std::min<int>(sc.divRow, 2), b = std::max<int>(sc.divRow, 2);
+        uint8_t code = 0;
+        if (rand32() % 100 < 75) code = codes[a + (int) (rand32() % (uint32_t) (b - a + 1))];
+        sc.rhythm[(size_t) i] = code;
+        if (code >= 20) // a held note covers the following steps
+            for (int k = 1; k < code - 20 && i + k <= tr.end; ++k) sc.rhythm[(size_t) (i + k)] = 99;
+    }
+}
+
+void Engine::playStoch(int s, int pos, double grid, double L, double bpm, bool parity, int64_t counter) {
+    auto& q = proj.seqs[(size_t) s];
+    auto& pat = q.pat();
+    auto& tr = pat.tracks[0];
+    auto& sc = pat.stoch;
+    const int len = tr.length();
+    // mutate the phrase at the start of every cycle
+    if (!sc.valid) {
+        for (int i = 0; i < kMaxSteps; ++i) { sc.rhythm[(size_t) i] = 0; sc.pitch[(size_t) i] = 0; }
+        for (int i = tr.start; i <= tr.end; ++i) regenStoch(sc, tr, i, true, true);
+        sc.valid = true;
+    } else if (len > 0 && counter % len == 0 && counter > 0) {
+        for (int i = tr.start; i <= tr.end; ++i) {
+            bool p = sc.pitchRand > 0 && (int) (rand32() % 7) < sc.pitchRand;
+            bool rh = sc.rhythmRand > 0 && (int) (rand32() % 7) < sc.rhythmRand;
+            if (p || rh) regenStoch(sc, tr, i, p, rh);
+        }
+    }
+    int total = 0;
+    for (auto l : sc.noteLevel) total += l;
+    const uint8_t code = sc.rhythm[(size_t) pos];
+    if (code == 0 || code == 99 || total == 0 || !q.active || q.muted) return;
+
+    double time = grid;
+    if (parity) time += (pat.swing - 50) / 50.0 * L;
+    time += q.nudgeMs / 1000.0 * bpm / 60.0;
+    const Step& prof = tr.steps[(size_t) pos]; // velocity / gate profiles drawn in the column editors
+    const int vel = prof.velocity;
+    const double gate = prof.gate >= kGateLegato ? 1.03 : prof.gate / 100.0;
+    const int note = std::clamp(q.baseMidi() + sc.pitch[(size_t) pos] + transposeOffset[(size_t) s], 0, 127);
+    auto add = [&](double on, double dur) {
+        push({on, 0, q.channel, (uint8_t) note, (uint8_t) std::clamp(vel, 1, 127), (uint8_t) s, 0, 0});
+        push({on + std::max(0.002, dur), 1, q.channel, (uint8_t) note, 0, (uint8_t) s, 0, 0});
+    };
+    if (code >= 20) add(time, (code - 20) * L * 0.98);
+    else if (code == 1) add(time, gate * L);
+    else { double d = L / code; for (int i = 0; i < code; ++i) add(time + i * d, d * 0.5); }
 }
 
 void Engine::process(const Transport& host, int numSamples, const std::vector<MidiIn>& in, std::vector<MidiOut>& out) {

@@ -17,9 +17,9 @@ constexpr int kNumTracks = 8;
 constexpr int kMaxPolyNotes = 7;
 constexpr int kNumGrooves = 14;
 
-enum class Mode : uint8_t { Mono = 0, Poly, Multi, Chord, Count };
+enum class Mode : uint8_t { Mono = 0, Poly, Multi, Chord, Stoch, Count };
 inline const char* modeLabel(Mode m) {
-    switch (m) { case Mode::Mono: return "MONO"; case Mode::Poly: return "POLY"; case Mode::Multi: return "MULT"; case Mode::Chord: return "CHRD"; default: return "?"; }
+    switch (m) { case Mode::Mono: return "MONO"; case Mode::Poly: return "POLY"; case Mode::Multi: return "MULT"; case Mode::Chord: return "CHRD"; case Mode::Stoch: return "STCH"; default: return "?"; }
 }
 
 enum class Dir : uint8_t { Forward = 0, Reverse, Pendulum, Pong, Random, Drunk, Count };
@@ -109,8 +109,23 @@ struct Track {
     int length() const { return (int) end - (int) start + 1; }
 };
 
+// Stochastic mode (manual 6.8): note probabilities + randomisation controls, and the generated phrase
+// buffer (kept in the project so a locked phrase is saved with the set).
+struct Stochastic {
+    std::array<uint8_t, 12> noteLevel {}; // 0 = off, 1..8 = probability weight (columns 1-12, semitones from root)
+    uint8_t octUp = 0, octDown = 0;       // 0..4 octaves (column 13)
+    uint8_t divRow = 2;                   // 0..7 rhythm range, 2 = base division only (column 14)
+    uint8_t pitchRand = 3;                // 0..7 -> 0..100 % steps re-generated per cycle (column 15)
+    uint8_t rhythmRand = 3;               // 0..7 (column 16)
+    bool valid = false;                   // buffer generated?
+    std::array<int8_t, kMaxSteps> pitch {};  // semitones from root (incl. octave)
+    std::array<uint8_t, kMaxSteps> rhythm {}; // 0 rest, 1 normal, 2/3/4/6/8 ratchets, 20+n = hold n steps, 99 covered by hold
+    Stochastic() { noteLevel[0] = 8; }
+};
+
 struct Pattern {
     std::array<Track, kNumTracks> tracks;
+    Stochastic stoch;
     uint8_t swing = 50;            // 10..90, 50 = none (saved with pattern, manual 4.8)
     bool isEmpty() const;
 };

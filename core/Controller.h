@@ -53,6 +53,7 @@ private:
     const Sequencer& seq() const { return proj.seqs[(size_t) sel]; }
     bool isMulti() const { return seq().mode == Mode::Multi; }
     bool isChord() const { return seq().mode == Mode::Chord; }
+    bool isStoch() const { return seq().mode == Mode::Stoch; }
     int stepPages() const { return isChord() ? 4 : 3; }
     bool lanesView() const { return isMulti() && !pianoRoll[(size_t) sel]; }
     int trackIndex() const { return isMulti() ? selTrack[(size_t) sel] : 0; }
@@ -75,6 +76,9 @@ private:
     void transposeAll(int x, int y, double nowMs);
     void columnPad(int x, int y, double nowMs);
     void loadPad(int x, int y, double nowMs);
+    void stochPad(int x, int y, double nowMs);
+    void renderStoch(Frame& f) const;
+    std::unique_ptr<Pattern> stochToPattern() const;
     void editHeldSteps(int knob, int delta, double nowMs);
     void editGlobal(int knob, int delta, double nowMs);
     void editShift(int knob, int delta, double nowMs);

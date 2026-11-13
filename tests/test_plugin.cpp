@@ -69,6 +69,13 @@ int main() {
                 auto& tr = proc.project().seqs[0].pat().tracks[0];
                 tr.steps[6].active = true; tr.steps[6].numNotes = 1; tr.steps[6].notes[0] = 3; tr.steps[6].tie = 2;
                 tr.steps[10].active = true; tr.steps[10].numNotes = 1; tr.steps[10].notes[0] = 5;
+                if (juce::SystemStats::getEnvironmentVariable("TEK_SNAP_STOCH", "").isNotEmpty()) {
+                    auto& q = proc.project().seqs[0];
+                    q.mode = tek::Mode::Stoch; q.scale = 1;
+                    auto& sc = q.pat().stoch;
+                    sc.noteLevel = {8, 0, 3, 0, 6, 2, 0, 7, 0, 4, 1, 0};
+                    sc.octUp = 2; sc.octDown = 1; sc.divRow = 5; sc.pitchRand = 4; sc.rhythmRand = 0;
+                }
                 if (juce::SystemStats::getEnvironmentVariable("TEK_SNAP_CHORD", "").isNotEmpty()) {
                     proc.project().seqs[0].mode = tek::Mode::Chord;
                     proc.project().seqs[0].scale = 1;

@@ -83,6 +83,8 @@ private:
     float rand01() { return (float) (rand32() & 0xffffff) / (float) 0x1000000; }
     int tracksFor(const Sequencer& q) const { return q.mode == Mode::Multi ? kNumTracks : 1; }
     bool evalTrig(const Step& st, TrackRt& r, int len);
+    void regenStoch(Stochastic& sc, const Track& tr, int i, bool pitch, bool rhythm);
+    void playStoch(int s, int pos, double grid, double L, double bpm, bool parity, int64_t counter);
 
     Project& proj;
     double sr = 44100.0;

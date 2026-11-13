@@ -172,5 +172,29 @@ int runControllerTests() {
         CCHECK(r.p->seqs[0].mode == Mode::Poly);
         CCHECK(r.tr0().steps[0].numNotes == 4);
     }
+    { // stochastic: grid is a control surface; copy the phrase into a mono sequencer
+        Rig r;
+        r.p->seqs[0].mode = Mode::Stoch;
+        auto& sc = r.p->seqs[0].pat().stoch;
+        r.tap(4, 0);              // E at 100 %
+        CCHECK(sc.noteLevel[4] == 8);
+        r.tap(4, 0);              // same level again = off
+        CCHECK(sc.noteLevel[4] == 0);
+        r.tap(12, 2);             // +2 octaves
+        CCHECK(sc.octUp == 2);
+        r.tap(14, 7);             // pitch randomisation 0 % = locked
+        CCHECK(sc.pitchRand == 0);
+        r.tap(15, 0);             // rhythm 100 %
+        CCHECK(sc.rhythmRand == 7);
+        CCHECK(!r.tr0().steps[4].active); // pads did not create steps
+        Frame f; r.c.render(f, r.t);
+        CCHECK(f.labels[3] == "MOD");
+        // fake a generated phrase and copy it to sequencer 2
+        sc.valid = true; sc.rhythm[0] = 1; sc.pitch[0] = 7; sc.rhythm[3] = 22; sc.pitch[3] = 12;
+        r.hold(Btn::Copy); r.press(Btn::Seq1); r.release(Btn::Copy);
+        r.hold(Btn::Paste); r.press(Btn::Seq2); r.release(Btn::Paste);
+        auto& t2 = r.p->seqs[1].pat().tracks[0];
+        CCHECK(t2.steps[0].active && t2.steps[0].notes[0] == 7 && t2.steps[3].tie == 1 && t2.steps[3].notes[0] == 12);
+    }
     return cfail;
 }

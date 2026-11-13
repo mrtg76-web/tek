@@ -270,6 +270,39 @@ static void testChords() {
     }
 }
 
+static void testStochastic() {
+    auto p = std::make_unique<Project>();
+    auto& q = p->seqs[0];
+    q.mode = Mode::Stoch;
+    auto& sc = q.pat().stoch;
+    sc.noteLevel = {}; sc.noteLevel[7] = 8; // only G
+    sc.pitchRand = 0; sc.rhythmRand = 0;  // generate once, then locked
+    Engine e(*p);
+    auto n = ons(run(e, 8.0));
+    CHECK(!n.empty());
+    bool allG = true; for (auto& x : n) if (x.note != 55) allG = false;
+    CHECK(allG);
+    CHECK(sc.valid);
+    // locked: the second bar repeats the first
+    std::vector<double> b1, b2;
+    for (auto& x : n) { if (x.ppq < 3.99) b1.push_back(x.ppq); else if (x.ppq < 7.99) b2.push_back(x.ppq - 4.0); }
+    if (b1.size() != b2.size()) { for (auto x : b1) std::printf("%.2f ", x); std::printf("\n"); for (auto x : b2) std::printf("%.2f ", x); std::printf("\n"); }
+    CHECK(b1.size() == b2.size());
+    for (size_t i = 0; i < b1.size() && i < b2.size(); ++i) CHECK(std::fabs(b1[i] - b2[i]) < 0.01);
+    // octave range spreads pitches, randomisation changes the phrase
+    sc.noteLevel[0] = 8; sc.octUp = 2; sc.pitchRand = 7; sc.rhythmRand = 7; sc.valid = false;
+    Engine e2(*p);
+    auto n2 = ons(run(e2, 16.0));
+    int maxNote = 0, minNote = 127;
+    for (auto& x : n2) { maxNote = std::max(maxNote, x.note); minNote = std::min(minNote, x.note); }
+    CHECK(minNote >= 48 && maxNote <= 79 && maxNote > 60);
+    // serialization keeps the phrase
+    auto s1 = serialize(*p);
+    auto p2 = std::make_unique<Project>();
+    CHECK(deserialize(s1, *p2));
+    CHECK(p2->seqs[0].pat().stoch.valid && p2->seqs[0].pat().stoch.rhythm == sc.rhythm && p2->seqs[0].pat().stoch.octUp == 2);
+}
+
 int runControllerTests(); // defined in test_controller.cpp
 
 int main() {
@@ -284,6 +317,7 @@ int main() {
     testTimelineAlignment();
     testSerialization();
     testChords();
+    testStochastic();
     failures += runControllerTests();
     if (failures == 0) std::printf("ALL TESTS PASSED\n");
     else std::printf("%d FAILURE(S)\n", failures);

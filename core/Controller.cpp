@@ -101,7 +101,6 @@ void Controller::placeNote(Track& tr, int idx, int degree) {
 }
 
 void Controller::toggleStep(int x, int y, double nowMs) {
-    (void) nowMs;
     pushUndo();
     if (lanesView()) {
         int t = 7 - y;
@@ -122,7 +121,10 @@ void Controller::toggleStep(int x, int y, double nowMs) {
             for (int i = 0; i < st.numNotes; ++i) if (st.notes[(size_t) i] != deg) st.notes[(size_t) w++] = st.notes[(size_t) i];
             st.numNotes = (uint8_t) w;
         } else st.clear();
-    } else placeNote(tr, idx, deg);
+    } else {
+        placeNote(tr, idx, deg);
+        if (isChord()) msg(chordName(seq().scale, seq().baseMidi() + st.octave * 12, deg, st.chordType), nowMs);
+    }
 }
 
 void Controller::tieSteps(const HeldPad& first, int x, int y, double nowMs) {
@@ -228,6 +230,7 @@ void Controller::padDown(int x, int y, double nowMs) {
         heldPads.push_back({x, y, nowMs, true});
         return;
     }
+    if (isStoch()) { stochPad(x, y, nowMs); heldPads.push_back({x, y, nowMs, true}); return; }
     if (held(Btn::Copy)) {
         btnConsumed[(int) Btn::Copy] = true;
         if (!stepClipFresh) { stepClip.clear(); stepClipFresh = true; clipAnchor = idx; }
@@ -286,6 +289,11 @@ void Controller::columnPad(int x, int y, double nowMs) {
     auto& st = tr.steps[(size_t) idx];
     int r = 7 - y;
     pushUndo();
+    if (isStoch()) {
+        if (columnParam == 0) { st.velocity = (uint8_t) std::clamp((int) std::lround(r * 127.0 / 7.0), 1, 127); msg("VEL " + std::to_string(st.velocity), nowMs); }
+        else if (columnParam == 1) { st.gate = r == 7 ? kGateLegato : (uint8_t) std::clamp(r * 14 + 2, 2, 99); msg("GATE " + std::to_string(st.gate), nowMs); }
+        return;
+    }
     if (columnParam != 2 && r == 0) { if (st.active) st.clear(); return; }
     if (!st.active) placeNote(tr, idx, st.numNotes ? st.notes[0] : (lanesView() ? 0 : viewDegC()));
     if (columnParam == 0) { st.velocity = (uint8_t) std::clamp((int) std::lround(r * 127.0 / 7.0), 1, 127); msg("VEL " + std::to_string(st.velocity), nowMs); }
@@ -320,6 +328,53 @@ void Controller::loadPad(int x, int y, double nowMs) {
     msg("S" + std::to_string(s + 1) + " PATTERN " + std::to_string(p + 1), nowMs);
 }
 
+void Controller::stochPad(int x, int y, double nowMs) {
+    auto& sc = seq().pat().stoch;
+    const int r = 7 - y;
+    pushUndo();
+    if (x < 12) {
+        auto& l = sc.noteLevel[(size_t) x];
+        l = (uint8_t) (l == r + 1 ? 0 : r + 1);
+        int pc = (seq().rootPc + x) % 12;
+        msg(std::string(pitchClassName(pc)) + "  " + std::to_string(l * 100 / 8) + "%", nowMs);
+    } else if (x == 12) {
+        if (r >= 4) { int up = r - 3; sc.octUp = (uint8_t) (sc.octUp == up ? 0 : up); }
+        else { int dn = 4 - r; sc.octDown = (uint8_t) (sc.octDown == dn ? 0 : dn); }
+        msg("OCTAVES +" + std::to_string(sc.octUp) + " / -" + std::to_string(sc.octDown), nowMs);
+    } else if (x == 13) {
+        static const char* names[8] = {"x4 long", "x2 long", "base", "1/2", "1/3", "1/4", "1/6", "1/8"};
+        sc.divRow = (uint8_t) r;
+        msg(std::string("RHYTHM RANGE: ") + names[std::min(r, 2)] + (r == 2 ? "" : std::string(" .. ") + names[std::max(r, 2)]), nowMs);
+    } else if (x == 14) {
+        sc.pitchRand = (uint8_t) r;
+        msg(r == 0 ? "PITCH LOCKED" : "PITCH RANDOM " + std::to_string(r * 100 / 7) + "%", nowMs);
+    } else {
+        sc.rhythmRand = (uint8_t) r;
+        msg(r == 0 ? "RHYTHM LOCKED" : "RHYTHM RANDOM " + std::to_string(r * 100 / 7) + "%", nowMs);
+    }
+}
+
+// The generated stochastic phrase as a mono pattern (for copy -> paste into mono / poly sequencers)
+std::unique_ptr<Pattern> Controller::stochToPattern() const {
+    auto p = std::make_unique<Pattern>(seq().pat());
+    auto& tr = p->tracks[0];
+    const auto& sc = seq().pat().stoch;
+    for (int i = 0; i < kMaxSteps; ++i) {
+        Step prof = tr.steps[(size_t) i];
+        auto& st = tr.steps[(size_t) i];
+        st = Step();
+        st.velocity = prof.velocity; st.gate = prof.gate;
+        uint8_t code = sc.valid ? sc.rhythm[(size_t) i] : 0;
+        if (i < tr.start || i > tr.end || code == 0 || code == 99) continue;
+        st.active = true; st.numNotes = 1;
+        st.notes[0] = (int8_t) std::clamp(semisToDegree(seq().scale, sc.pitch[(size_t) i]), -120, 120);
+        if (code >= 20) st.tie = (uint8_t) (code - 21);
+        else if (code > 1) { st.retrig = code; st.gate = 99; }
+    }
+    p->stoch = Stochastic();
+    return p;
+}
+
 // ============================================================================ encoders
 void Controller::relative(uint8_t Step::*field, int delta, int lo, int hi, const char* name, double nowMs) {
     auto& tr = track();
@@ -327,7 +382,7 @@ void Controller::relative(uint8_t Step::*field, int delta, int lo, int hi, const
     bool any = false;
     for (int i = 0; i < kMaxSteps; ++i) {
         auto& st = tr.steps[(size_t) i];
-        if (!st.active) continue;
+        if (!st.active && !(isStoch() && i >= tr.start && i <= tr.end)) continue;
         if (field == &Step::velocity && st.velLocked) continue;
         any = true;
         st.*field = (uint8_t) std::clamp((int) (st.*field) + delta, lo, hi);
@@ -420,6 +475,7 @@ void Controller::editGlobal(int knob, int delta, double nowMs) {
             break;
         case 2: relative(&Step::gate, delta, 2, kGateLegato, "Gate", nowMs); break;
         case 3:
+            if (isStoch()) { msg("MOD LANE: PHASE 4", nowMs); break; }
             if (grid == GridMode::Column && columnParam == 2) relative(&Step::retrig, delta, 1, 8, "Retrig", nowMs);
             else relative(&Step::repeats, delta, 1, 15, "Repeat", nowMs);
             break;
@@ -595,6 +651,7 @@ void Controller::tapKnob(int knob, double nowMs) {
         else { scrollMode = !scrollMode; msg(scrollMode ? "KNOB 2: SCROLL" : "KNOB 2: OCTAVE", nowMs); }
         return;
     }
+    if (isStoch() && knob == 3) { msg("MOD LANE: PHASE 4", nowMs); return; }
     int param = knob == 0 ? 0 : knob == 2 ? 1 : 2;
     if (grid == GridMode::Column && columnParam == param) grid = GridMode::Steps;
     else { grid = GridMode::Column; columnParam = param; }
@@ -641,7 +698,12 @@ void Controller::seqButton(int s, double nowMs) {
         msg("S" + std::to_string(s + 1) + (q.muted ? " MUTED" : " UNMUTED"), nowMs);
         return;
     }
-    if (held(Btn::Copy)) { btnConsumed[(int) Btn::Copy] = true; patClip = std::make_unique<Pattern>(proj.seqs[(size_t) s].pat()); msg("COPIED SEQ " + std::to_string(s + 1), nowMs); return; }
+    if (held(Btn::Copy)) {
+        btnConsumed[(int) Btn::Copy] = true;
+        if (proj.seqs[(size_t) s].mode == Mode::Stoch) { int keep = sel; sel = s; patClip = stochToPattern(); sel = keep; msg("COPIED PHRASE " + std::to_string(s + 1), nowMs); }
+        else { patClip = std::make_unique<Pattern>(proj.seqs[(size_t) s].pat()); msg("COPIED SEQ " + std::to_string(s + 1), nowMs); }
+        return;
+    }
     if (held(Btn::Paste)) {
         btnConsumed[(int) Btn::Paste] = true;
         if (patClip) { int keep = sel; sel = s; pushUndo(); sel = keep; proj.seqs[(size_t) s].pat() = *patClip; msg("PASTED SEQ " + std::to_string(s + 1), nowMs); }
@@ -704,6 +766,14 @@ void Controller::shiftPattern(int dx, int dy, double nowMs) {
     // restrict to two held columns if present
     if (heldPads.size() >= 2) { a = stepAt(std::min(heldPads[0].x, heldPads[1].x)); b = stepAt(std::max(heldPads[0].x, heldPads[1].x)); for (auto& h : heldPads) h.consumed = true; }
     int len = b - a + 1;
+    if (isStoch() && dx != 0 && len > 1) {
+        auto& sc = seq().pat().stoch;
+        std::vector<int8_t> tp(sc.pitch.begin() + a, sc.pitch.begin() + b + 1);
+        std::vector<uint8_t> tr2(sc.rhythm.begin() + a, sc.rhythm.begin() + b + 1);
+        for (int i = 0; i < len; ++i) { int d = a + ((i + dx) % len + len) % len; sc.pitch[(size_t) d] = tp[(size_t) i]; sc.rhythm[(size_t) d] = tr2[(size_t) i]; }
+        msg(dx < 0 ? "PHRASE <" : "PHRASE >", nowMs);
+        return;
+    }
     if (dx != 0 && len > 1) {
         std::vector<Step> tmp(tr.steps.begin() + a, tr.steps.begin() + b + 1);
         for (int i = 0; i < len; ++i) tr.steps[(size_t) (a + ((i + dx) % len + len) % len)] = tmp[(size_t) i];
@@ -825,6 +895,7 @@ void Controller::button(Btn b, bool down, double nowMs) {
             }
             break;
         case Btn::Paste:
+            if (shift && isStoch()) { pushUndo(); seq().pat().stoch.valid = false; msg("NEW PHRASE", nowMs); break; }
             if (shift) {
                 pushUndo();
                 if (isMulti()) { for (auto& st : track().steps) st.clear(); msg("CLEAR TRACK", nowMs); }
@@ -979,6 +1050,13 @@ void Controller::renderDisplay(Frame& f, double nowMs) const {
         bool retrigCol = grid == GridMode::Column && columnParam == 2;
         set("VEL", rangeText(&Step::velocity), k2.c_str(), v2, "GATE", rangeText(&Step::gate), retrigCol ? "RTRG" : "REPT",
             retrigCol ? rangeText(&Step::retrig) : rangeText(&Step::repeats));
+        if (isStoch()) {
+            const auto& sc = q.pat().stoch;
+            f.labels[3] = "MOD"; f.values[3] = "-";
+            int notes = 0; for (auto l : sc.noteLevel) if (l) ++notes;
+            f.line2 = std::to_string(notes) + " notes  P " + (sc.pitchRand ? std::to_string(sc.pitchRand * 100 / 7) + "%" : std::string("LOCK"))
+                    + "  R " + (sc.rhythmRand ? std::to_string(sc.rhythmRand * 100 / 7) + "%" : std::string("LOCK")) + "  " + scaleLibrary()[q.scale].label;
+        }
         if (grid == GridMode::Column) f.line2 = columnParam == 0 ? "Velocity editor" : columnParam == 1 ? "Gate editor (top = LEG)" : "Retrig editor (Shift: repeats)";
         if (grid == GridMode::Load) { f.line1 = "LOAD: rows = sequencers, columns = patterns"; f.line2 = "Copy/Paste + pad, Shift + pad = clear"; }
     }
@@ -1039,6 +1117,34 @@ void Controller::renderSteps(Frame& f, double nowMs) const {
     }
 }
 
+void Controller::renderStoch(Frame& f) const {
+    const auto& q = seq();
+    const auto& sc = q.pat().stoch;
+    const uint32_t col = seqColor(q.color);
+    const auto& iv = scaleLibrary()[q.scale].intervals;
+    for (int x = 0; x < 12; ++x) {
+        bool inScale = std::find(iv.begin(), iv.end(), x) != iv.end();
+        int lvl = sc.noteLevel[(size_t) x];
+        for (int y = 0; y < 8; ++y) {
+            int r = 7 - y;
+            uint32_t c = r == 0 ? (inScale ? 0x46494e : 0x4a1e1e) : 0;
+            if (r < lvl) c = inScale ? dim(col, 0.45f + 0.55f * r / 7.0f) : dim(0xff3030, 0.4f + 0.5f * r / 7.0f);
+            f.pads[(size_t) (y * 16 + x)] = c;
+        }
+    }
+    for (int y = 0; y < 8; ++y) {
+        int r = 7 - y;
+        uint32_t c = (r == 3 || r == 4) ? 0x3b3e43 : 0;
+        if (r >= 4 && r - 3 <= sc.octUp) c = 0x30c070;
+        if (r <= 3 && 4 - r <= sc.octDown) c = 0x30a0c0;
+        f.pads[(size_t) (y * 16 + 12)] = c;
+        int a = std::min<int>(sc.divRow, 2), b = std::max<int>(sc.divRow, 2);
+        f.pads[(size_t) (y * 16 + 13)] = (r >= a && r <= b) ? (r == 2 ? 0xffffff : 0xffb000) : (r == 2 ? 0x3b3e43 : 0);
+        f.pads[(size_t) (y * 16 + 14)] = r <= sc.pitchRand ? (sc.pitchRand == 0 ? 0xff3030 : dim(0xd060ff, 0.4f + 0.6f * r / 7.0f)) : 0;
+        f.pads[(size_t) (y * 16 + 15)] = r <= sc.rhythmRand ? (sc.rhythmRand == 0 ? 0xff3030 : dim(0x40d0ff, 0.4f + 0.6f * r / 7.0f)) : 0;
+    }
+}
+
 void Controller::renderLanes(Frame& f, double nowMs) const {
     (void) nowMs;
     const auto& q = seq();
@@ -1081,7 +1187,7 @@ void Controller::renderColumn(Frame& f) const {
         const int idx = pg * 16 + x;
         const auto& st = tr.steps[(size_t) idx];
         int h = 0; // number of lit rows from the bottom
-        if (st.active) {
+        if (st.active || (isStoch() && idx >= tr.start && idx <= tr.end)) {
             if (columnParam == 0) h = std::clamp((int) std::lround(st.velocity * 7.0 / 127.0), 1, 7) + 1;
             else if (columnParam == 1) h = st.gate >= kGateLegato ? 8 : std::clamp(st.gate / 16, 0, 6) + 1;
             else h = std::clamp((int) st.retrig, 1, 8);
@@ -1089,7 +1195,7 @@ void Controller::renderColumn(Frame& f) const {
         for (int y = 0; y < 8; ++y) {
             int r = 7 - y;
             uint32_t c = 0;
-            if (st.active && r < h) c = (columnParam == 2 && st.repeats > 1 && r < (st.repeats + 1) / 2) ? 0xd03030 : dim(col, 0.4f + 0.6f * r / 7.0f);
+            if (h > 0 && r < h) c = (columnParam == 2 && st.repeats > 1 && r < (st.repeats + 1) / 2) ? 0xd03030 : dim(col, 0.4f + 0.6f * r / 7.0f);
             if (idx == ph && eng.isRunning()) c = c ? mix(c, 0xffffff, 0.4f) : 0x303030;
             f.pads[(size_t) (y * 16 + x)] = c;
         }
@@ -1124,6 +1230,7 @@ void Controller::render(Frame& f, double nowMs) const {
     if (grid == GridMode::Load) renderLoad(f, nowMs);
     else if (grid == GridMode::Column) renderColumn(f);
     else if (lanesView()) renderLanes(f, nowMs);
+    else if (isStoch()) renderStoch(f);
     else renderSteps(f, nowMs);
     renderDisplay(f, nowMs);
 

@@ -163,6 +163,20 @@ std::string serialize(const Project& p) {
         for (int pi = 0; pi < kNumPatterns; ++pi) {
             const auto& pat = q.patterns[(size_t) pi];
             o << "PAT " << s << ' ' << pi << ' ' << (int) pat.swing << '\n';
+            {
+                const auto& st = pat.stoch;
+                Stochastic d;
+                bool def = !st.valid && st.noteLevel == d.noteLevel && st.octUp == 0 && st.octDown == 0 && st.divRow == d.divRow
+                        && st.pitchRand == d.pitchRand && st.rhythmRand == d.rhythmRand;
+                if (!def) {
+                    o << "STO " << s << ' ' << pi;
+                    for (auto l : st.noteLevel) o << ' ' << (int) l;
+                    o << ' ' << (int) st.octUp << ' ' << (int) st.octDown << ' ' << (int) st.divRow << ' ' << (int) st.pitchRand
+                      << ' ' << (int) st.rhythmRand << ' ' << (int) st.valid;
+                    if (st.valid) for (int i = 0; i < kMaxSteps; ++i) o << ' ' << (int) st.pitch[(size_t) i] << ' ' << (int) st.rhythm[(size_t) i];
+                    o << '\n';
+                }
+            }
             for (int t = 0; t < kNumTracks; ++t) {
                 const auto& tr = pat.tracks[(size_t) t];
                 o << "TRK " << s << ' ' << pi << ' ' << t << ' ' << (int) tr.start << ' ' << (int) tr.end << ' ' << (int) tr.dir << ' '
@@ -239,6 +253,19 @@ bool deserialize(const std::string& str, Project& p) {
             st.voicing = clampv<uint8_t>(at(5), 0, 5);
             st.spread = clampv<uint8_t>(at(6), 0, 6);
             st.strum = clampv<int8_t>(at(7), -100, 100);
+        } else if (tag == "STO" && v.size() >= 20) {
+            int s = at(0), pi = at(1);
+            if (s < 0 || s >= kNumSeqs || pi < 0 || pi >= kNumPatterns) continue;
+            auto& st = p.seqs[(size_t) s].patterns[(size_t) pi].stoch;
+            for (int k = 0; k < 12; ++k) st.noteLevel[(size_t) k] = clampv<uint8_t>(at(2 + (size_t) k), 0, 8);
+            st.octUp = clampv<uint8_t>(at(14), 0, 4); st.octDown = clampv<uint8_t>(at(15), 0, 4);
+            st.divRow = clampv<uint8_t>(at(16), 0, 7); st.pitchRand = clampv<uint8_t>(at(17), 0, 7);
+            st.rhythmRand = clampv<uint8_t>(at(18), 0, 7);
+            st.valid = at(19) != 0 && v.size() >= 20 + 2 * (size_t) kMaxSteps;
+            if (st.valid) for (int i = 0; i < kMaxSteps; ++i) {
+                st.pitch[(size_t) i] = clampv<int8_t>(at(20 + 2 * (size_t) i), -96, 96);
+                st.rhythm[(size_t) i] = clampv<uint8_t>(at(21 + 2 * (size_t) i), 0, 99);
+            }
         } else if (tag == "PAT" && v.size() >= 3) {
             int s = at(0), pi = at(1);
             if (s < 0 || s >= kNumSeqs || pi < 0 || pi >= kNumPatterns) continue;

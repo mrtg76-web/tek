@@ -1,8 +1,26 @@
-# TEK — 8 kanallı performans sequencer'ı (Faz 1 + Faz 2: Chord)
+# TEK — 8 kanallı performans sequencer'ı (Faz 1 + Faz 2: Chord, Stochastic)
 
 TEK, OXI ONE MKII kılavuzunu temel alan bir VST3/AU sequencer plugin'i. Ses üretmiyor, MIDI üretiyor. Ableton'daki synth'leri, drum rack'leri ve harici cihazları sürüyor.
 
-## Faz 2: Chord modu (yeni)
+## Faz 2: Stochastic modu (yeni)
+
+Setup'ta knob 4 ile **STCH** seç. Bu modda nota girmiyorsun: grid bir kontrol paneline dönüşüyor ve sequencer her döngüde yeni bir cümle üretiyor.
+
+| Sütun | İşlevi |
+|---|---|
+| 1–12 | Kökten itibaren her yarım ton bir sütun. Sütunun yüksekliği o notanın çıkma olasılığı. Aynı yüksekliğe tekrar dokunmak notayı kapatır. Ölçek dışı notalar kırmızı görünür. |
+| 13 | Oktav aralığı. Üst yarı +1…+4 oktav (yeşil), alt yarı −1…−4 oktav (mavi). |
+| 14 | Ritim aralığı. Beyaz = temel division. Aşağısı daha uzun notalar (×2, ×4), yukarısı ratchet'ler (1/2…1/8). |
+| 15 | Perde rastgeleliği: her döngüde step'lerin yüzde kaçının perdesi yeniden üretilir. En alt pad = **kilit** (kırmızı). |
+| 16 | Ritim rastgeleliği, aynı mantıkla. En alt pad = kilit. |
+
+- **Kilitleme:** 15 ve 16'yı en alta çekersen o an çalan cümle donar. Kilitli cümle Ableton projesiyle birlikte kaydedilir.
+- **Velocity/gate profili:** Knob 1 veya 3'e dokunup sütun editöründe çiz. Knob'u çevirmek profili toptan değiştirir. Knob 2 cümleyi oktav oktav kaydırır.
+- **Kopyalama:** COPY + bu sequencer'ın tuşuna bas, sonra PASTE + Mono veya Poly bir sequencer'ın tuşuna bas. Üretilen cümle düzenlenebilir step'lere dönüşür.
+- **Yeni cümle:** Shift + PASTE cümleyi silip yenisini üretir. Shift + 16/64 cümleyi sola/sağa kaydırır.
+- **Uzunluk:** INIT/END + pad ile değişir. Knob 4'teki MOD şeridi Faz 4'te (modülasyon) gelecek.
+
+## Faz 2: Chord modu
 
 - **Modu açma:** Shift + sequencer tuşu ile Setup'ı aç, knob 4 ile **CHRD** seç, knob 4'e bas.
 - **Grid:** her satır, ölçeğin o derecesindeki diatonik akoru çalar (örneğin C majörde I = C major, ii = D minor…). Step başına bir akor girilir; aynı sütunda başka satıra dokunmak akoru değiştirir. Akorun diğer notaları sütunda soluk renkte görünür.
