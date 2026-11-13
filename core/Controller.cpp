@@ -1,4 +1,5 @@
 #include "Controller.h"
+#include "Chords.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -378,12 +379,22 @@ void Controller::editHeldSteps(int knob, int delta, double nowMs) {
                 case 2: st.ramp = clampT<int8_t>(st.ramp + delta * 5, -70, 70); shown = "Ramp " + std::to_string(st.ramp) + "%"; break;
                 case 3: st.accel = clampT<int8_t>(st.accel + delta * 2, -28, 28); shown = "Accel " + std::to_string(st.accel) + "%"; break;
             }
-        } else {
+        } else if (stepPage == 2) {
             switch (knob) {
-                case 0: st.offset = clampT<int8_t>(st.offset + delta, -45, 45); shown = "Offst " + std::to_string(st.offset) + "%"; break;
-                case 1: st.retrig = clampT<uint8_t>(st.retrig + delta, 1, 8); shown = "Retrg " + std::to_string(st.retrig); break;
-                case 2: st.rng = clampT<int8_t>(st.rng + delta, 0, 24); shown = "Rng " + std::to_string(st.rng) + "iv"; break;
-                case 3: st.repProb = clampT<uint8_t>(st.repProb + delta * 5, 0, 100); shown = "Rpt% " + std::to_string(st.repProb); break;
+                case 0: st.offset = clampT<int8_t>(st.offset + delta, -45, 45); break;
+                case 1:
+                    if (isChord()) st.strum = clampT<int8_t>(st.strum + delta * 5, -100, 100);
+                    else st.retrig = clampT<uint8_t>(st.retrig + delta, 1, 8);
+                    break;
+                case 2: st.rng = clampT<int8_t>(st.rng + delta, 0, 24); break;
+                case 3: st.repProb = clampT<uint8_t>(st.repProb + delta * 5, 0, 100); break;
+            }
+        } else { // page 4 (chord): spread, type, voicing
+            switch (knob) {
+                case 0: st.spread = clampT<uint8_t>(st.spread + delta, 0, 6); break;
+                case 1: st.chordType = clampT<uint8_t>(st.chordType + delta, 0, kNumChordTypes - 1); break;
+                case 2: st.voicing = clampT<uint8_t>(st.voicing + delta, 0, kNumVoicings - 1); break;
+                default: break;
             }
         }
     }
@@ -455,6 +466,7 @@ void Controller::editMenu(int knob, int delta, double nowMs) {
             } else {
                 if (knob == 0) { if (q.mode == Mode::Poly) q.nVoices = clampT<uint8_t>(q.nVoices + delta, 1, 7);
                                  else if (isMulti()) tr.swing = (uint8_t) (tr.swing == 0 ? (delta > 0 ? 10 : 0) : (tr.swing + delta < 10 ? 0 : std::min(90, tr.swing + delta))); }
+                if (knob == 1 && (q.mode == Mode::Poly || q.mode == Mode::Chord)) q.chMx = clampT<uint8_t>(q.chMx + delta, 0, 1);
                 if (knob == 3) q.color = clampT<uint8_t>(q.color + delta, 0, 7);
             }
             break;
@@ -479,6 +491,7 @@ void Controller::editMenu(int knob, int delta, double nowMs) {
             break;
         case Menu::StepM: {
             pushUndo();
+            if (menuPage == 2 && knob == 3) { q.bassMode = clampT<uint8_t>(q.bassMode + delta, 0, 17); break; }
             for (auto& st : tr.steps) {
                 if (!st.active) continue;
                 if (menuPage == 0) {
@@ -486,11 +499,15 @@ void Controller::editMenu(int knob, int delta, double nowMs) {
                     if (knob == 1) st.repDur = clampT<uint8_t>(st.repDur + delta, 1, 15);
                     if (knob == 2) st.ramp = clampT<int8_t>(st.ramp + delta * 5, -70, 70);
                     if (knob == 3) st.accel = clampT<int8_t>(st.accel + delta * 2, -28, 28);
-                } else {
+                } else if (menuPage == 1) {
                     if (knob == 0) st.offset = clampT<int8_t>(st.offset + delta, -45, 45);
-                    if (knob == 1) st.retrig = clampT<uint8_t>(st.retrig + delta, 1, 8);
+                    if (knob == 1) { if (isChord()) st.strum = clampT<int8_t>(st.strum + delta * 5, -100, 100); else st.retrig = clampT<uint8_t>(st.retrig + delta, 1, 8); }
                     if (knob == 2) st.rng = clampT<int8_t>(st.rng + delta, 0, 24);
                     if (knob == 3) st.repProb = clampT<uint8_t>(st.repProb + delta * 5, 0, 100);
+                } else {
+                    if (knob == 0) st.spread = clampT<uint8_t>(st.spread + delta, 0, 6);
+                    if (knob == 1) st.chordType = clampT<uint8_t>(st.chordType + delta, 0, kNumChordTypes - 1);
+                    if (knob == 2) st.voicing = clampT<uint8_t>(st.voicing + delta, 0, kNumVoicings - 1);
                 }
             }
             break;
@@ -595,6 +612,19 @@ void Controller::changeMode(Mode m, double nowMs) {
     auto& q = seq();
     if (q.mode == m) return;
     pushUndo();
+    if (q.mode == Mode::Chord && m == Mode::Poly) { // chords become editable poly notes
+        for (auto& p : q.patterns) for (auto& st : p.tracks[0].steps) {
+            if (!st.active || !st.numNotes) continue;
+            int semis[kMaxChordNotes];
+            int n = std::min(buildChord(q.scale, st.notes[0], st.chordType, st.voicing, st.spread, semis), kMaxPolyNotes);
+            for (int k = 0; k < n; ++k) st.notes[(size_t) k] = clampT<int8_t>(semisToDegree(q.scale, semis[k]), -120, 120);
+            st.numNotes = (uint8_t) n;
+        }
+    }
+    if (m == Mode::Chord) // a chord step keeps its lowest note as the chord root
+        for (auto& p : q.patterns) for (auto& st : p.tracks[0].steps) {
+            if (st.numNotes > 1) { int lo = st.notes[0]; for (int k = 1; k < st.numNotes; ++k) lo = std::min<int>(lo, st.notes[(size_t) k]); st.notes[0] = (int8_t) lo; st.numNotes = 1; }
+        }
     if (m == Mode::Mono) // keep the first note of each step
         for (auto& p : q.patterns) for (auto& st : p.tracks[0].steps) if (st.numNotes > 1) st.numNotes = 1;
     q.mode = m;
@@ -756,17 +786,21 @@ void Controller::button(Btn b, bool down, double nowMs) {
             if (shift) { menu = menu == Menu::Groove ? Menu::None : Menu::Groove; menuPage = 0; }
             else eng.flowHeld = true;
             break;
-        case Btn::Step: menu = menu == Menu::StepM ? Menu::None : Menu::StepM; menuPage = 0; break;
+        case Btn::Step:
+            if (shift && isChord()) { menu = Menu::StepM; menuPage = 2; break; } // chord global
+            menu = menu == Menu::StepM ? Menu::None : Menu::StepM; menuPage = 0;
+            break;
         case Btn::Track:
             if (shift) { follow = !follow; msg(follow ? "FOLLOW ON" : "FOLLOW OFF", nowMs); }
             else { menu = menu == Menu::TrackM ? Menu::None : Menu::TrackM; menuPage = 0; }
             break;
         case Btn::Page:
             if (shift) { expandCondense(true, nowMs); break; }
-            if (!heldPads.empty()) { stepPage = (stepPage + 1) % 3; for (auto& h : heldPads) h.consumed = true; break; }
+            if (!heldPads.empty()) { stepPage = (stepPage + 1) % stepPages(); for (auto& h : heldPads) h.consumed = true; break; }
             if (menu == Menu::Setup) menuPage = (menuPage + 1) % 3;
             else if (menu == Menu::TrackM && isMulti()) menuPage = (menuPage + 1) % 2;
-            else if (menu == Menu::StepM || menu == Menu::Groove) menuPage = (menuPage + 1) % 2;
+            else if (menu == Menu::StepM) menuPage = (menuPage + 1) % (isChord() ? 3 : 2);
+            else if (menu == Menu::Groove) menuPage = (menuPage + 1) % 2;
             else if (menu == Menu::Nudge) menu = Menu::Bend;
             else if (menu == Menu::Bend) menu = Menu::Nudge;
             break;
@@ -837,14 +871,16 @@ std::string Controller::stepHeader(int idx) const {
     const auto& st = tr.steps[(size_t) idx];
     std::string h = isMulti() ? "T" + std::to_string((lanesView() && !heldPads.empty() ? 7 - heldPads.front().y : trackIndex()) + 1) + "-" : "Stp ";
     h += std::to_string(idx + 1);
-    if (st.active && st.numNotes) {
+    if (st.active && st.numNotes && isChord()) {
+        h += " " + chordName(seq().scale, seq().baseMidi() + st.octave * 12, st.notes[0], st.chordType);
+    } else if (st.active && st.numNotes) {
         int base = isMulti() ? tr.baseNote : seq().baseMidi();
         h += " " + noteName(base + degreeToSemis(seq().scale, st.notes[0]) + st.octave * 12);
         if (st.numNotes > 1) h += "+" + std::to_string(st.numNotes - 1);
     }
     if (st.muted) h += " (M)";
     if (st.trig.type == TrigType::Locked) h += " LOCK";
-    h += "  " + std::to_string(stepPage + 1) + "/3";
+    h += "  " + std::to_string(stepPage + 1) + "/" + std::to_string(stepPages());
     return h;
 }
 
@@ -884,7 +920,8 @@ void Controller::renderDisplay(Frame& f, double nowMs) const {
             f.line2 = "In/Bnk/PC: stored, used in phase 3";
         } else {
             std::string a = q.mode == Mode::Poly ? std::to_string(q.nVoices) : isMulti() ? (tr.swing == 0 ? "Same" : std::to_string(tr.swing)) : "-";
-            set(q.mode == Mode::Poly ? "nVoice" : isMulti() ? "T.Swg" : "-", a, "-", "", "-", "", "Color", std::to_string(q.color + 1));
+            bool mx = q.mode == Mode::Poly || q.mode == Mode::Chord;
+            set(q.mode == Mode::Poly ? "nVoice" : isMulti() ? "T.Swg" : "-", a, mx ? "ChMx" : "-", mx ? (q.chMx ? "On" : "Off") : "", "-", "", "Color", std::to_string(q.color + 1));
         }
     } else if (menu == Menu::TrackM) {
         if (isMulti()) {
@@ -899,9 +936,12 @@ void Controller::renderDisplay(Frame& f, double nowMs) const {
         const Step* ref = nullptr;
         for (auto& st : tr.steps) if (st.active) { ref = &st; break; }
         Step d; if (!ref) ref = &d;
-        f.line1 = "Step Global  " + std::to_string(menuPage + 1) + "/2";
+        const int pages = isChord() ? 3 : 2;
+        f.line1 = (menuPage == 2 ? std::string("Chord Global  ") : std::string("Step Global  ")) + std::to_string(menuPage + 1) + "/" + std::to_string(pages);
+        auto bassTxt = [&]() { return q.bassMode == 0 ? std::string("OFF") : q.bassMode == 1 ? std::string("ON") : "Ch" + std::to_string(q.bassMode - 1); };
         if (menuPage == 0) set("Rept", std::to_string(ref->repeats), "Durat", "x" + std::to_string(ref->repDur), "Ramp", std::to_string(ref->ramp) + "%", "Accel", std::to_string(ref->accel) + "%");
-        else set("Offst", std::to_string(ref->offset) + "%", "Retrg", std::to_string(ref->retrig), "Rng", std::to_string(ref->rng) + "iv", "Rpt%", std::to_string(ref->repProb));
+        else if (menuPage == 1) set("Offst", std::to_string(ref->offset) + "%", isChord() ? "Strm" : "Retrg", isChord() ? std::to_string(ref->strum) + "%" : std::to_string(ref->retrig), "Rng", std::to_string(ref->rng) + "iv", "Rpt%", std::to_string(ref->repProb));
+        else set("Sprd", std::to_string(ref->spread), "Type", chordTypeLabel(ref->chordType), "Voic", voicingLabel(ref->voicing), "Bass", bassTxt());
     } else if (menu == Menu::Nudge || menu == Menu::Bend) {
         f.line1 = menu == Menu::Nudge ? "Time Offset [ms]" : "Time Bend [%]";
         f.line2 = "Tap knob: SQ1-4 / SQ5-8   Shift: all";
@@ -921,14 +961,15 @@ void Controller::renderDisplay(Frame& f, double nowMs) const {
         auto idxs = heldStepIndices();
         const auto& htr = lanesView() ? seq().pat().tracks[(size_t) (7 - heldPads.front().y)] : tr;
         const auto& st = htr.steps[(size_t) idxs.front()];
-        f.line1 = idxs.size() > 1 ? "Multipress (" + std::to_string(idxs.size()) + ")  " + std::to_string(stepPage + 1) + "/3" : stepHeader(idxs.front());
+        f.line1 = idxs.size() > 1 ? "Multipress (" + std::to_string(idxs.size()) + ")  " + std::to_string(stepPage + 1) + "/" + std::to_string(stepPages()) : stepHeader(idxs.front());
         f.line2 = st.tie ? "Tie " + std::to_string(st.tie + 1) + " steps" : "";
         if (stepPage == 0) {
             std::string vel = st.velLocked ? std::to_string(st.velocity) + "*" : std::to_string(st.velocity);
             std::string oct = isMulti() ? (st.numNotes ? noteName(htr.baseNote + degreeToSemis(q.scale, st.notes[0])) : "-") : std::to_string(st.octave);
             set("Vel", vel, isMulti() ? "Note" : "Oct", oct, "Gate", st.gate >= kGateLegato ? "LEG" : std::to_string(st.gate), "Trig", trigLabel(st.trig));
         } else if (stepPage == 1) set("Rept", std::to_string(st.repeats), "Durat", "x" + std::to_string(st.repDur), "Ramp", std::to_string(st.ramp) + "%", "Accel", std::to_string(st.accel) + "%");
-        else set("Offst", std::to_string(st.offset) + "%", "Retrg", std::to_string(st.retrig), "Rng", std::to_string(st.rng) + "iv", "Rpt%", std::to_string(st.repProb));
+        else if (stepPage == 2) set("Offst", std::to_string(st.offset) + "%", isChord() ? "Strm" : "Retrg", isChord() ? std::to_string(st.strum) + "%" : std::to_string(st.retrig), "Rng", std::to_string(st.rng) + "iv", "Rpt%", std::to_string(st.repProb));
+        else set("Sprd", std::to_string(st.spread), "Type", chordTypeLabel(st.chordType), "Voicing", voicingLabel(st.voicing), "-", "");
     } else if (held(Btn::Shift)) {
         set("BPM", proj.internalClock ? std::to_string((int) proj.bpm) : "HOST", "SWNG", std::to_string(isMulti() && tr.swing ? tr.swing : q.pat().swing),
             "SCAL", scaleLibrary()[q.scale].label, "ROOT", noteName(q.baseMidi()));
@@ -963,6 +1004,16 @@ void Controller::renderSteps(Frame& f, double nowMs) const {
             const auto& s = tr.steps[(size_t) i];
             if (s.active && s.tie > 0 && i + s.tie >= idx) tieSrc = &s;
         }
+        std::array<bool, 8> chordTones {};
+        if (isChord() && st.active && st.numNotes) { // show the other chord tones dimly
+            int semis[kMaxChordNotes];
+            int n = buildChord(q.scale, st.notes[0], st.chordType, st.voicing, st.spread, semis);
+            for (int k = 0; k < n; ++k) {
+                int d = semisToDegree(q.scale, semis[k]);
+                int row = d - viewDegC();
+                if (degreeToSemis(q.scale, d) == semis[k] && row >= 0 && row < 8 && d != st.notes[0]) chordTones[(size_t) (7 - row)] = true;
+            }
+        }
         bool above = false, below = false;
         if (st.active) for (int n = 0; n < st.numNotes; ++n) {
             int d = st.notes[(size_t) n];
@@ -976,6 +1027,7 @@ void Controller::renderSteps(Frame& f, double nowMs) const {
             if (showRange && (idx == tr.start || idx == tr.end)) c = 0x3a2050;
             if (!inRange) c = 0;
             if (tieSrc && tieSrc->hasNote(deg)) c = 0x707070;
+            if (chordTones[(size_t) y]) c = dim(col, 0.42f);
             if (st.active && st.hasNote(deg)) c = st.muted ? 0x4a1d5a : (inRange ? col : dim(col, 0.35f));
             if (c == 0 || c == 0x3b3e43) {
                 if (y == 0 && above) c = 0x606060;

@@ -10,7 +10,7 @@ option(TEK_BUILD_TESTS "Build the headless core tests" ON)
 set(TEK_JUCE_DIR "" CACHE PATH "Path to a local JUCE checkout (fetched automatically when empty)")
 
 # ---------------------------------------------------------------- core (framework independent)
-add_library(tek_core STATIC core/Model.cpp core/Engine.cpp core/Controller.cpp)
+add_library(tek_core STATIC core/Model.cpp core/Chords.cpp core/Engine.cpp core/Controller.cpp)
 target_include_directories(tek_core PUBLIC core)
 
 if(TEK_BUILD_TESTS)

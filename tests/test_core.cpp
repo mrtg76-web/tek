@@ -1,6 +1,8 @@
 // Headless tests for the TEK core (engine + controller). Build: see CMakeLists (target tek_tests).
 #include "../core/Engine.h"
 #include "../core/Controller.h"
+#include "../core/Chords.h"
+#include <algorithm>
 #include <cstdio>
 #include <cmath>
 #include <map>
@@ -229,6 +231,45 @@ static void testScales() {
     CHECK(semisToDegree(1, 12) == 7);
 }
 
+static void testChords() {
+    int v[8];
+    auto eq = [&](int n, std::vector<int> want) { return std::vector<int>(v, v + n) == want; };
+    CHECK(eq(buildChord(1, 0, 0, 0, 0, v), {0, 4, 7}));          // C major
+    CHECK(eq(buildChord(1, 1, 0, 0, 0, v), {2, 5, 9}));          // D minor
+    CHECK(eq(buildChord(1, 6, 0, 0, 0, v), {11, 14, 17}));       // B dim
+    CHECK(eq(buildChord(1, 0, 1, 0, 0, v), {0, 4, 7, 11}));      // Cmaj7
+    CHECK(eq(buildChord(1, 0, 0, 1, 0, v), {4, 7, 12}));         // 1st inversion
+    CHECK(eq(buildChord(1, 0, 0, 2, 0, v), {7, 12, 16}));        // 2nd inversion
+    CHECK(eq(buildChord(1, 0, 0, 3, 0, v), {0, 7, 16}));         // open
+    CHECK(eq(buildChord(1, 0, 0, 0, 2, v), {0, 4, 7, 12, 16}));  // spread 2
+    CHECK(eq(buildChord(1, 0, 9, 0, 0, v), {0, 5, 7}));          // sus4
+    CHECK(buildChord(1, 0, 4, 0, 6, v) <= 8);                    // 13th + spread capped at 8 notes
+    CHECK(chordName(1, 48, 1, 0) == "D2 minor");
+    CHECK(chordName(1, 48, 4, 1) == "G2 major 7");
+    CHECK(chordName(2, 48, 1, 0) == "D2 dim");                   // ii of minor
+
+    auto p = std::make_unique<Project>();
+    auto& q = p->seqs[0];
+    q.mode = Mode::Chord; q.scale = 1; q.bassMode = 1;
+    auto& st = q.pat().tracks[0].steps[0];
+    st.active = true; st.numNotes = 1; st.notes[0] = 4; st.velocity = 90; // G major
+    Engine e(*p);
+    auto n = ons(run(e, 0.2));
+    std::vector<int> notes; for (auto& x : n) notes.push_back(x.note);
+    std::sort(notes.begin(), notes.end());
+    CHECK((notes == std::vector<int>{43, 55, 59, 62}));
+
+    q.bassMode = 0; q.chMx = 1; st.strum = 100;
+    Engine e2(*p);
+    auto n2 = ons(run(e2, 0.25));
+    CHECK(n2.size() == 3);
+    if (n2.size() == 3) {
+        CHECK(n2[0].note == 55 && n2[0].ch == 0);
+        CHECK(n2[1].note == 59 && n2[1].ch == 1 && n2[1].ppq > n2[0].ppq + 0.05);
+        CHECK(n2[2].ch == 2);
+    }
+}
+
 int runControllerTests(); // defined in test_controller.cpp
 
 int main() {
@@ -242,6 +283,7 @@ int main() {
     testMultitrackAndPoly();
     testTimelineAlignment();
     testSerialization();
+    testChords();
     failures += runControllerTests();
     if (failures == 0) std::printf("ALL TESTS PASSED\n");
     else std::printf("%d FAILURE(S)\n", failures);

@@ -52,6 +52,8 @@ private:
     Sequencer& seq() { return proj.seqs[(size_t) sel]; }
     const Sequencer& seq() const { return proj.seqs[(size_t) sel]; }
     bool isMulti() const { return seq().mode == Mode::Multi; }
+    bool isChord() const { return seq().mode == Mode::Chord; }
+    int stepPages() const { return isChord() ? 4 : 3; }
     bool lanesView() const { return isMulti() && !pianoRoll[(size_t) sel]; }
     int trackIndex() const { return isMulti() ? selTrack[(size_t) sel] : 0; }
     Track& track() { return seq().pat().tracks[(size_t) trackIndex()]; }

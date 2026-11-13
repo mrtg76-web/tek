@@ -69,8 +69,12 @@ int main() {
                 auto& tr = proc.project().seqs[0].pat().tracks[0];
                 tr.steps[6].active = true; tr.steps[6].numNotes = 1; tr.steps[6].notes[0] = 3; tr.steps[6].tie = 2;
                 tr.steps[10].active = true; tr.steps[10].numNotes = 1; tr.steps[10].notes[0] = 5;
-                proc.controller().button(tek::Btn::Mute, true, 0); proc.controller().button(tek::Btn::Mute, false, 10);
-                proc.controller().encoderTurn(0, 3, 20);
+                if (juce::SystemStats::getEnvironmentVariable("TEK_SNAP_CHORD", "").isNotEmpty()) {
+                    proc.project().seqs[0].mode = tek::Mode::Chord;
+                    proc.project().seqs[0].scale = 1;
+                    tr.steps[6].tie = 0; tr.steps[6].chordType = 1;
+                    proc.controller().padDown(6, 4, 0);
+                }
             }
             std::unique_ptr<TekEditor> ed(static_cast<TekEditor*>(proc.createEditor()));
             ed->setSize(1300, 500);

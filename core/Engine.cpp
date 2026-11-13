@@ -1,4 +1,5 @@
 #include "Engine.h"
+#include "Chords.h"
 #include <algorithm>
 #include <cmath>
 
@@ -196,21 +197,45 @@ void Engine::scheduleStep(int s, int t, double grid, double L, double bpm) {
     else if (st.gate >= kGateLegato) dur = L * 1.03;
     else dur = std::max(0.002, st.gate / 100.0 * L);
 
-    // ---- notes
+    // ---- notes: build the voices of this step (pitch, channel, strum delay)
+    struct Voice { int note; uint8_t ch; double delay; };
     const int nNotes = q.mode == Mode::Poly ? std::min<int>(st.numNotes, q.nVoices) : 1;
-    auto pitchOf = [&](int degree) {
-        int base = q.mode == Mode::Multi ? (int) tr.baseNote : q.baseMidi();
-        int n = base + degreeToSemis(q.scale, degree) + st.octave * 12 + transposeOffset[(size_t) s];
-        return std::clamp(n, 0, 127);
-    };
     const uint8_t ch = q.mode == Mode::Multi ? tr.channel : q.channel;
-
-    auto addNote = [&](double on, double length, int degree, double v) {
-        int note = pitchOf(degree);
-        int vv = std::clamp((int) std::lround(v), 1, 127);
-        push({on, 0, ch, (uint8_t) note, (uint8_t) vv, (uint8_t) s, (uint8_t) t, 0});
-        push({on + length, 1, ch, (uint8_t) note, 0, (uint8_t) s, (uint8_t) t, 0});
+    auto buildVoices = [&](int degShift, Voice* out) -> int {
+        int n = 0;
+        if (q.mode == Mode::Chord) {
+            int semis[kMaxChordNotes];
+            int m = buildChord(q.scale, st.notes[0] + degShift, st.chordType, st.voicing, st.spread, semis);
+            int base = q.baseMidi() + st.octave * 12 + transposeOffset[(size_t) s];
+            if (q.bassMode > 0) {
+                uint8_t bch = q.bassMode == 1 ? q.channel : (uint8_t) (q.bassMode - 2);
+                out[n++] = {std::clamp(base + chordRootSemis(q.scale, st.notes[0] + degShift) - 12, 0, 127), bch, 0.0};
+            }
+            const double strumStep = std::abs(st.strum) / 100.0 * L / std::max(1, m);
+            for (int k = 0; k < m; ++k) {
+                uint8_t c = q.chMx ? (uint8_t) ((q.channel + k) % 16) : q.channel;
+                double d = (st.strum >= 0 ? k : (m - 1 - k)) * strumStep;
+                out[n++] = {std::clamp(base + semis[k], 0, 127), c, d};
+            }
+        } else {
+            int basePitch = q.mode == Mode::Multi ? (int) tr.baseNote : q.baseMidi();
+            for (int k = 0; k < nNotes; ++k) {
+                int deg = st.notes[(size_t) k] + degShift;
+                int note = std::clamp(basePitch + degreeToSemis(q.scale, deg) + st.octave * 12 + transposeOffset[(size_t) s], 0, 127);
+                uint8_t c = (q.mode == Mode::Poly && q.chMx) ? (uint8_t) ((q.channel + k) % 16) : ch;
+                out[n++] = {note, c, 0.0};
+            }
+        }
+        return n;
     };
+
+    auto addVoice = [&](double on, double length, const Voice& vc, double v) {
+        int vv = std::clamp((int) std::lround(v), 1, 127);
+        push({on + vc.delay, 0, vc.ch, (uint8_t) vc.note, (uint8_t) vv, (uint8_t) s, (uint8_t) t, 0});
+        push({on + vc.delay + length, 1, vc.ch, (uint8_t) vc.note, 0, (uint8_t) s, (uint8_t) t, 0});
+    };
+    Voice voices[kMaxChordNotes + 2];
+    const int nv = buildVoices(0, voices);
 
     if (st.repeats > 1) {
         const int n = st.repeats;
@@ -222,11 +247,13 @@ void Engine::scheduleStep(int s, int t, double grid, double L, double bpm) {
             if (i > 0 && st.repProb < 100 && (int) (rand32() % 100) >= st.repProb) { tpos += d; d *= f; continue; }
             double v = vel * (1.0 + st.ramp / 100.0 * (n > 1 ? (double) i / (n - 1) : 0.0));
             double length = std::max(0.002, std::min(dur, d * 0.9));
-            for (int k = 0; k < nNotes; ++k) {
-                int deg = st.notes[(size_t) k];
-                if (i > 0 && st.rng > 0) deg += (int) (rand32() % (uint32_t) (2 * st.rng + 1)) - st.rng;
-                addNote(tpos, length, deg, v);
-            }
+            if (i > 0 && st.rng > 0) {
+                Voice rv[kMaxChordNotes + 2];
+                int shift = (int) (rand32() % (uint32_t) (2 * st.rng + 1)) - st.rng;
+                int rn = buildVoices(shift, rv);
+                for (int k = 0; k < rn; ++k) addVoice(tpos, length, rv[k], v);
+            } else
+                for (int k = 0; k < nv; ++k) addVoice(tpos, length, voices[k], v);
             tpos += d; d *= f;
         }
     } else if (st.retrig > 1) {
@@ -234,9 +261,9 @@ void Engine::scheduleStep(int s, int t, double grid, double L, double bpm) {
         double span = st.tie > 0 ? dur : std::max(dur, L * 0.5);
         double d = span / n;
         for (int i = 0; i < n; ++i)
-            for (int k = 0; k < nNotes; ++k) addNote(time + i * d, std::max(0.002, d * 0.5), st.notes[(size_t) k], vel);
+            for (int k = 0; k < nv; ++k) addVoice(time + i * d, std::max(0.002, d * 0.5), voices[k], vel);
     } else {
-        for (int k = 0; k < nNotes; ++k) addNote(time, dur, st.notes[(size_t) k], vel);
+        for (int k = 0; k < nv; ++k) addVoice(time, dur, voices[k], vel);
     }
 }
 

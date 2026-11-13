@@ -141,5 +141,36 @@ int runControllerTests() {
         r.hold(Btn::Seq1); r.tap(0, 5); r.release(Btn::Seq1);
         CCHECK(r.tr0().steps[0].notes[0] == 2);
     }
+    { // chord mode: tap places a chord root, step page 4 edits chord type, chord -> poly expands
+        Rig r;
+        r.hold(Btn::Shift); r.press(Btn::Seq1); r.release(Btn::Shift);
+        r.c.encoderTurn(3, 3, r.t);
+        r.c.encoderPress(3, true, r.t); r.c.encoderPress(3, false, r.t + 20);
+        CCHECK(r.p->seqs[0].mode == Mode::Chord);
+        r.press(Btn::Back);
+        r.p->seqs[0].scale = 1;
+        r.tap(0, 6);  // degree 1 = D minor
+        r.tap(0, 4);  // same column, another row replaces (one chord per step)
+        auto& st = r.tr0().steps[0];
+        CCHECK(st.numNotes == 1 && st.notes[0] == 3);
+        r.c.padDown(0, 4, r.t); r.t += 600;
+        r.press(Btn::Page); r.press(Btn::Page); r.press(Btn::Page); // page 4
+        r.c.encoderTurn(1, 1, r.t);   // type -> 7th
+        r.c.encoderTurn(2, 1, r.t);   // voicing -> I inversion
+        r.c.padUp(0, 4, r.t); r.t += 400;
+        CCHECK(st.chordType == 1 && st.voicing == 1);
+        Frame f; r.c.render(f, r.t);
+        // global bass via shift + step
+        r.hold(Btn::Shift); r.press(Btn::Step); r.release(Btn::Shift);
+        r.c.encoderTurn(3, 1, r.t);
+        CCHECK(r.p->seqs[0].bassMode == 1);
+        r.press(Btn::Back);
+        // convert to poly: F maj7 1st inv -> 4 notes
+        r.hold(Btn::Shift); r.press(Btn::Seq1); r.release(Btn::Shift);
+        r.c.encoderTurn(3, -2, r.t);
+        r.c.encoderPress(3, true, r.t); r.c.encoderPress(3, false, r.t + 20);
+        CCHECK(r.p->seqs[0].mode == Mode::Poly);
+        CCHECK(r.tr0().steps[0].numNotes == 4);
+    }
     return cfail;
 }

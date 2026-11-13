@@ -1,6 +1,22 @@
-# TEK — 8 kanallı performans sequencer'ı (Faz 1)
+# TEK — 8 kanallı performans sequencer'ı (Faz 1 + Faz 2: Chord)
 
 TEK, OXI ONE MKII kılavuzunu temel alan bir VST3/AU sequencer plugin'i. Ses üretmiyor, MIDI üretiyor. Ableton'daki synth'leri, drum rack'leri ve harici cihazları sürüyor.
+
+## Faz 2: Chord modu (yeni)
+
+- **Modu açma:** Shift + sequencer tuşu ile Setup'ı aç, knob 4 ile **CHRD** seç, knob 4'e bas.
+- **Grid:** her satır, ölçeğin o derecesindeki diatonik akoru çalar (örneğin C majörde I = C major, ii = D minor…). Step başına bir akor girilir; aynı sütunda başka satıra dokunmak akoru değiştirir. Akorun diğer notaları sütunda soluk renkte görünür.
+- **Pad basılıyken:** PAGE ile 4 sayfa arasında geçilir.
+  - Sayfa 1: Vel / Oct / Gate / Trig
+  - Sayfa 2: Rept / Durat / Ramp / Accel
+  - Sayfa 3: Offst / **Strm** (strum, ±%100) / Rng / Rpt%
+  - Sayfa 4: **Sprd** (üst oktav notaları, 0–6) / **Type** / **Voicing**
+- **Akor tipleri:** Triad, 7th, 9th, 11th, 13th, 6th, 6/9, add9, sus2, sus4, 7sus4, Power. Akorun majör, minör veya dim olması ölçekten gelir.
+- **Voicing:** No Inv, I Invr, II Invr, Open, I Open, II Open. Bir akor en fazla 8 nota olabilir.
+- **Chord Global:** Shift + STEP ile açılır, bütün step'leri birlikte değiştirir: Sprd, Type, Voic ve **Bass**. Bass seçenekleri: OFF, ON (akorun bir oktav altına kök nota ekler) veya Ch1–16 (bas notasını ayrı bir kanala gönderir, örneğin ayrı bir bas synth'ine).
+- **ChMx:** Setup sayfa 3'te açılır. Akorun her notasını sırayla bir sonraki MIDI kanalına dağıtır (mono synth'lerden akor kurmak için).
+- **Mod dönüşümü:** Chord → Poly geçişinde akorlar tek tek düzenlenebilir notalara dönüşür. Poly → Chord geçişinde her step'in en alt notası akorun kökü olur.
+- Chord palette/keyboard görünümü ve chord arp Faz 3'te (keyboard ve arpeggiator ile birlikte) gelecek.
 
 ## Faz 1'de olanlar
 

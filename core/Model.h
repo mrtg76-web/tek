@@ -17,9 +17,9 @@ constexpr int kNumTracks = 8;
 constexpr int kMaxPolyNotes = 7;
 constexpr int kNumGrooves = 14;
 
-enum class Mode : uint8_t { Mono = 0, Poly, Multi, Count };
+enum class Mode : uint8_t { Mono = 0, Poly, Multi, Chord, Count };
 inline const char* modeLabel(Mode m) {
-    switch (m) { case Mode::Mono: return "MONO"; case Mode::Poly: return "POLY"; case Mode::Multi: return "MULT"; default: return "?"; }
+    switch (m) { case Mode::Mono: return "MONO"; case Mode::Poly: return "POLY"; case Mode::Multi: return "MULT"; case Mode::Chord: return "CHRD"; default: return "?"; }
 }
 
 enum class Dir : uint8_t { Forward = 0, Reverse, Pendulum, Pong, Random, Drunk, Count };
@@ -80,6 +80,11 @@ struct Step {
     int8_t rng = 0;          // 0..24 random note range (scale intervals) for repeats
     uint8_t repProb = 100;   // repeat probability %
     uint8_t velLocked = 0;   // multitrack: velocity locked against global edits
+    // chord mode (notes[0] = root degree of the chord)
+    uint8_t chordType = 0;   // index into the chord type table
+    uint8_t voicing = 0;     // 0..5 (No Inv, I Inv, II Inv, Open, I Open, II Open)
+    uint8_t spread = 0;      // 0..6 extra upper-octave tones
+    int8_t strum = 0;        // -100..100 %
 
     bool hasNote(int degree) const {
         for (int i = 0; i < numNotes; ++i) if (notes[(size_t) i] == degree) return true;
@@ -125,6 +130,8 @@ struct Sequencer {
     uint8_t color = 0;             // 0..7 palette index (default = sequencer index)
     int8_t nudgeMs = 0;            // -100..100 ms
     int8_t timeBend = 0;           // -120..120 = -12.0..+12.0 %
+    uint8_t bassMode = 0;          // chord mode bass note: 0 Off, 1 On (same channel), 2..17 = channel 1..16
+    uint8_t chMx = 0;              // channel multiplex: 0 Off, 1 On (voice n -> channel + n)
     bool active = true;            // inactive = transport stopped for this seq
     bool muted = false;            // muted = runs but silent
     uint8_t curPattern = 0;

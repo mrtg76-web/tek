@@ -143,7 +143,8 @@ static bool stepIsDefault(const Step& s) {
     Step d;
     return !s.active && !s.muted && s.numNotes == 0 && s.velocity == d.velocity && s.octave == 0 && s.gate == d.gate
         && s.tie == 0 && s.trig == d.trig && s.repeats == 1 && s.repDur == 1 && s.ramp == 0 && s.accel == 0
-        && s.retrig == 1 && s.offset == 0 && s.rng == 0 && s.repProb == 100 && s.velLocked == 0;
+        && s.retrig == 1 && s.offset == 0 && s.rng == 0 && s.repProb == 100 && s.velLocked == 0
+        && s.chordType == 0 && s.voicing == 0 && s.spread == 0 && s.strum == 0;
 }
 
 std::string serialize(const Project& p) {
@@ -158,6 +159,7 @@ std::string serialize(const Project& p) {
           << (int) q.nudgeMs << ' ' << (int) q.timeBend << ' ' << (int) q.active << ' ' << (int) q.muted << ' '
           << (int) q.curPattern << ' ' << (int) q.groove << ' ' << q.grooveAccent << ' ' << q.grooveTime << ' '
           << (int) q.grooveOffset << ' ' << (int) q.grooveLen << ' ' << (int) q.grooveRand << '\n';
+        o << "SQ2 " << s << ' ' << (int) q.bassMode << ' ' << (int) q.chMx << '\n';
         for (int pi = 0; pi < kNumPatterns; ++pi) {
             const auto& pat = q.patterns[(size_t) pi];
             o << "PAT " << s << ' ' << pi << ' ' << (int) pat.swing << '\n';
@@ -167,8 +169,14 @@ std::string serialize(const Project& p) {
                   << (int) tr.div << ' ' << (int) tr.rndDiv << ' ' << (int) tr.channel << ' ' << (int) tr.baseNote << ' '
                   << (int) tr.swing << ' ' << (int) tr.muted << ' ' << (int) tr.defVel << ' ' << (int) tr.defGate << ' '
                   << (int) tr.defRepeats << '\n';
-                for (int i = 0; i < kMaxSteps; ++i)
-                    if (!stepIsDefault(tr.steps[(size_t) i])) writeStep(o, s, pi, t, i, tr.steps[(size_t) i]);
+                for (int i = 0; i < kMaxSteps; ++i) {
+                    const auto& st = tr.steps[(size_t) i];
+                    if (stepIsDefault(st)) continue;
+                    writeStep(o, s, pi, t, i, st);
+                    if (st.chordType || st.voicing || st.spread || st.strum)
+                        o << "SC " << s << ' ' << pi << ' ' << t << ' ' << i << ' ' << (int) st.chordType << ' ' << (int) st.voicing
+                          << ' ' << (int) st.spread << ' ' << (int) st.strum << '\n';
+                }
             }
         }
     }
@@ -219,6 +227,18 @@ bool deserialize(const std::string& str, Project& p) {
             q.grooveOffset = clampv<int8_t>(at(21), -15, 15);
             q.grooveLen = clampv<uint8_t>(at(22), 1, 16);
             q.grooveRand = clampv<uint8_t>(at(23), 0, 100);
+        } else if (tag == "SQ2" && v.size() >= 3) {
+            int s = at(0); if (s < 0 || s >= kNumSeqs) continue;
+            p.seqs[(size_t) s].bassMode = clampv<uint8_t>(at(1), 0, 17);
+            p.seqs[(size_t) s].chMx = clampv<uint8_t>(at(2), 0, 1);
+        } else if (tag == "SC" && v.size() >= 8) {
+            int s = at(0), pi = at(1), t = at(2), i = at(3);
+            if (s < 0 || s >= kNumSeqs || pi < 0 || pi >= kNumPatterns || t < 0 || t >= kNumTracks || i < 0 || i >= kMaxSteps) continue;
+            auto& st = p.seqs[(size_t) s].patterns[(size_t) pi].tracks[(size_t) t].steps[(size_t) i];
+            st.chordType = clampv<uint8_t>(at(4), 0, 11);
+            st.voicing = clampv<uint8_t>(at(5), 0, 5);
+            st.spread = clampv<uint8_t>(at(6), 0, 6);
+            st.strum = clampv<int8_t>(at(7), -100, 100);
         } else if (tag == "PAT" && v.size() >= 3) {
             int s = at(0), pi = at(1);
             if (s < 0 || s >= kNumSeqs || pi < 0 || pi >= kNumPatterns) continue;
