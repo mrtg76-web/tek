@@ -57,6 +57,7 @@ double Engine::trackStepLength(int s, int t) const {
     const auto& q = proj.seqs[(size_t) s];
     if (q.mode == Mode::Matr)
         return divisionBeats(q.pat().mat.tracks[(size_t) t].lanes[kLaneTrig].div) / (1.0 + q.timeBend / 1000.0);
+    if (q.mode == Mode::Domino) return stepLength(q, q.pat().tracks[1]);
     return stepLength(q, q.pat().tracks[(size_t) t]);
 }
 
@@ -64,7 +65,7 @@ void Engine::initTrack(int s, int t, double ppq) {
     auto& q = proj.seqs[(size_t) s];
     auto& r = rt[(size_t) s][(size_t) t];
     double L = trackStepLength(s, t);
-    r.matActive = 0.0; r.matHold = 0; r.matAccum = 0; r.matTicks = 0; r.lastNote = -1;
+    r.matActive = 0.0; r.matHold = 0; r.matAccum = 0; r.matTicks = 0; r.lastNote = -1; r.domNote = -1; r.domNoteUi = -1;
     r.laneCnt.fill(-1); for (auto& lp : r.lanePos) lp.store(0);
     int64_t idx = (int64_t) std::ceil(ppq / L - 1e-7);
     r.nextIdx = idx;
@@ -419,6 +420,55 @@ void Engine::playMatriceal(int s, int t, double grid, double L, double bpm) {
     else emit(time, dur, midi, vel, mt.channel);
 }
 
+// ---------------------------------------------------------------- domino mode (manual 6.10)
+// tracks[1] holds the trigger section (up to 64 steps), tracks[0] the note section (up to 32 steps).
+// Every trigger and every trigger repeat advances the note section by one step.
+void Engine::playDomino(int s, double grid, double L, double bpm) {
+    auto& q = proj.seqs[(size_t) s];
+    auto& pat = q.pat();
+    auto& trigT = pat.tracks[1];
+    auto& noteT = pat.tracks[0];
+    auto& r = rt[(size_t) s][0];
+    const int tlen = trigT.length();
+    int pos;
+    if (trigT.dir == Dir::Random) pos = trigT.start + (int) (rand32() % (uint32_t) std::max(1, tlen));
+    else pos = positionFor(trigT.dir == Dir::Drunk ? Dir::Forward : trigT.dir, trigT.start, trigT.end, r.counter);
+    const bool parity = (r.nextIdx % 2) != 0;
+    push({grid, 2, 0, 0, 0, (uint8_t) s, 1, (int16_t) pos});
+    r.counter++; r.sinceStart++;
+
+    const Step& ts = trigT.steps[(size_t) pos];
+    if (!ts.active) return;
+    if (!evalTrig(ts, r, tlen)) return;
+
+    double time = grid + (parity ? (pat.swing - 50) / 50.0 * L : 0.0) + q.nudgeMs / 1000.0 * bpm / 60.0;
+    const int n = std::max<int>(1, ts.repeats);
+    const double span = ts.repDur * L;
+    const double d = n > 1 ? span / n : L;
+    for (int i = 0; i < n; ++i) {
+        if (i > 0 && ts.repProb < 100 && (int) (rand32() % 100) >= ts.repProb) continue;
+        // advance the note section
+        r.domNote++;
+        const int npos = positionFor(noteT.dir == Dir::Random || noteT.dir == Dir::Drunk ? Dir::Forward : noteT.dir, noteT.start, noteT.end, r.domNote);
+        push({time + i * d, 4, 0, 0, 0, (uint8_t) s, 0, (int16_t) npos});
+        const Step& ns = noteT.steps[(size_t) npos];
+        if (!ns.active || ns.numNotes == 0 || !q.active || q.muted || ns.muted) continue;
+        if (ns.trig.type == TrigType::Prob && ns.trig.a < 100 && (int) (rand32() % 100) >= ns.trig.a) continue;
+        double on = time + i * d + ns.offset / 100.0 * L;
+        double dur;
+        if (ns.tie > 0 || ts.tie > 0) dur = (std::max<int>(ns.tie, ts.tie) + 1) * L * 0.98;
+        else if (ns.gate >= kGateLegato) dur = d * 1.03;
+        else dur = std::max(0.002, ns.gate / 100.0 * std::min(d, L));
+        const int voices = q.voice == 0 ? 1 : std::min<int>(ns.numNotes, 4);
+        for (int k = 0; k < voices; ++k) {
+            int note = std::clamp(q.baseMidi() + degreeToSemis(q.scale, ns.notes[(size_t) k]) + ns.octave * 12 + transposeOffset[(size_t) s], 0, 127);
+            uint8_t ch = q.chMx ? (uint8_t) ((q.channel + k) % 16) : q.channel;
+            push({on, 0, ch, (uint8_t) note, (uint8_t) std::clamp((int) ns.velocity, 1, 127), (uint8_t) s, 0, 0});
+            push({on + dur, 1, ch, (uint8_t) note, 0, (uint8_t) s, 0, 0});
+        }
+    }
+}
+
 void Engine::process(const Transport& host, int numSamples, const std::vector<MidiIn>& in, std::vector<MidiOut>& out) {
     // ---- MIDI input: transposition (manual 3.15 "Trnsp")
     for (auto& m : in) {
@@ -501,6 +551,7 @@ void Engine::process(const Transport& host, int numSamples, const std::vector<Mi
                 double L = trackStepLength(s, t);
                 if (r.nextGrid - L > blockEnd) break;
                 if (q.mode == Mode::Matr) playMatriceal(s, t, r.nextGrid, L, tp.bpm);
+                else if (q.mode == Mode::Domino) playDomino(s, r.nextGrid, L, tp.bpm);
                 else scheduleStep(s, t, r.nextGrid, L, tp.bpm);
                 double nextL = L;
                 if (q.mode != Mode::Matr && tr.rndDiv > 0 && (int) (rand32() % 100) < tr.rndDiv) nextL = L * ((rand32() & 1) ? 2.0 : 0.5);
@@ -520,7 +571,7 @@ void Engine::process(const Transport& host, int numSamples, const std::vector<Mi
     queue.resize(w);
     std::stable_sort(due.begin(), due.end(), [](const Ev& a, const Ev& b) {
         if (a.ppq != b.ppq) return a.ppq < b.ppq;
-        return a.kind > b.kind; // note offs before note ons at the same time
+        return (a.kind == 4 ? 2 : a.kind) > (b.kind == 4 ? 2 : b.kind); // note offs before note ons at the same time
     });
     for (auto& e : due) {
         int off = (int) std::floor((e.ppq - tp.ppq) / ppqPerSample);
@@ -529,6 +580,7 @@ void Engine::process(const Transport& host, int numSamples, const std::vector<Mi
             case 0: emitNoteOn(out, off, e.ch, e.d1, e.d2); break;
             case 1: emitNoteOff(out, off, e.ch, e.d1); break;
             case 2: rt[e.seq][e.track].playheadUi.store(e.pos, std::memory_order_relaxed); break;
+            case 4: rt[e.seq][0].domNoteUi.store(e.pos, std::memory_order_relaxed); break;
             default: out.push_back({off, e.ch, e.d1, e.d2}); break;
         }
     }

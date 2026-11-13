@@ -195,7 +195,7 @@ std::string serialize(const Project& p) {
           << (int) q.nudgeMs << ' ' << (int) q.timeBend << ' ' << (int) q.active << ' ' << (int) q.muted << ' '
           << (int) q.curPattern << ' ' << (int) q.groove << ' ' << q.grooveAccent << ' ' << q.grooveTime << ' '
           << (int) q.grooveOffset << ' ' << (int) q.grooveLen << ' ' << (int) q.grooveRand << '\n';
-        o << "SQ2 " << s << ' ' << (int) q.bassMode << ' ' << (int) q.chMx << '\n';
+        o << "SQ2 " << s << ' ' << (int) q.bassMode << ' ' << (int) q.chMx << ' ' << (int) q.voice << '\n';
         for (int pi = 0; pi < kNumPatterns; ++pi) {
             const auto& pat = q.patterns[(size_t) pi];
             o << "PAT " << s << ' ' << pi << ' ' << (int) pat.swing << '\n';
@@ -304,6 +304,7 @@ bool deserialize(const std::string& str, Project& p) {
             int s = at(0); if (s < 0 || s >= kNumSeqs) continue;
             p.seqs[(size_t) s].bassMode = clampv<uint8_t>(at(1), 0, 17);
             p.seqs[(size_t) s].chMx = clampv<uint8_t>(at(2), 0, 1);
+            if (v.size() >= 4) p.seqs[(size_t) s].voice = clampv<uint8_t>(at(3), 0, 1);
         } else if (tag == "SC" && v.size() >= 8) {
             int s = at(0), pi = at(1), t = at(2), i = at(3);
             if (s < 0 || s >= kNumSeqs || pi < 0 || pi >= kNumPatterns || t < 0 || t >= kNumTracks || i < 0 || i >= kMaxSteps) continue;

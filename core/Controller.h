@@ -55,12 +55,13 @@ private:
     bool isChord() const { return seq().mode == Mode::Chord; }
     bool isStoch() const { return seq().mode == Mode::Stoch; }
     bool isMatr() const { return seq().mode == Mode::Matr; }
+    bool isDomino() const { return seq().mode == Mode::Domino; }
     MatTrack& matTrack(int k) { return seq().pat().mat.tracks[(size_t) k]; }
     const MatTrack& matTrack(int k) const { return seq().pat().mat.tracks[(size_t) k]; }
     int matLaneOf(int k) const { return matLane[(size_t) sel][(size_t) k]; }
     int stepPages() const { return isChord() ? 4 : 3; }
     bool lanesView() const { return isMulti() && !pianoRoll[(size_t) sel]; }
-    int trackIndex() const { return isMulti() ? selTrack[(size_t) sel] : 0; }
+    int trackIndex() const { return isMulti() ? selTrack[(size_t) sel] : (isDomino() ? 1 : 0); }
     Track& track() { return seq().pat().tracks[(size_t) trackIndex()]; }
     const Track& track() const { return seq().pat().tracks[(size_t) trackIndex()]; }
     int& viewDeg() { return viewDegree[(size_t) sel][(size_t) trackIndex()]; }
@@ -82,6 +83,13 @@ private:
     void loadPad(int x, int y, double nowMs);
     void stochPad(int x, int y, double nowMs);
     void matPadDown(int x, int y, double nowMs);
+    void domPadDown(int x, int y, double nowMs);
+    void domTap(int x, int y, double nowMs);
+    void domKnob(int knob, int delta, double nowMs);
+    void renderDomino(Frame& f) const;
+    void renderDominoDisplay(Frame& f) const;
+    Track& noteTrack() { return seq().pat().tracks[isDomino() ? 0 : (size_t) trackIndex()]; }
+    const Track& noteTrack() const { return seq().pat().tracks[isDomino() ? 0 : (size_t) trackIndex()]; }
     void matTap(int x, int y, double nowMs);
     void matKnob(int knob, int delta, double nowMs);
     void matKnobTap(int knob, double nowMs);
@@ -121,7 +129,10 @@ private:
     std::array<int, kNumSeqs> page {};
     std::array<int, kNumSeqs> selTrack {};
     std::array<bool, kNumSeqs> pianoRoll {};
-    std::array<int, kNumSeqs> matSel {};                       // selected matriceal track
+    std::array<int, kNumSeqs> matSel {};
+    std::array<int, kNumSeqs> domOct {};
+    std::array<int, kNumSeqs> domVel {};
+    std::array<std::vector<int>, kNumSeqs> domLast {};                       // selected matriceal track
     std::array<std::array<int, kNumMatTracks>, kNumSeqs> matLane {}; // selected lane per track
     std::array<std::array<int, kNumTracks>, kNumSeqs> viewDegree {};
     bool follow = true;

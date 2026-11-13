@@ -224,5 +224,29 @@ int runControllerTests() {
         Frame f; r.c.render(f, r.t);
         CCHECK(f.line1.rfind("T", 0) == 0);
     }
+    { // domino: trigger section, note section + keyboard
+        Rig r;
+        r.p->seqs[0].mode = Mode::Domino;
+        r.p->seqs[0].scale = 1;
+        auto& pat = r.p->seqs[0].pat();
+        r.tap(2, 2);                          // trigger step 3
+        CCHECK(pat.tracks[1].steps[2].active);
+        r.c.padDown(0, 0, r.t); r.t += 100;   // hold note step 1
+        r.tap(2, 7);                          // keyboard: degree 2 (E)
+        r.tap(4, 7);                          // poly: add degree 4 (G)
+        r.c.padUp(0, 0, r.t); r.t += 400;
+        CCHECK(pat.tracks[0].steps[0].active && pat.tracks[0].steps[0].numNotes == 2 && pat.tracks[0].steps[0].notes[1] == 4);
+        r.tap(5, 6);                          // upper octave key = degree 12, becomes the "last" note
+        r.tap(3, 0);                          // tap empty note step places the last note
+        CCHECK(pat.tracks[0].steps[3].active && pat.tracks[0].steps[3].notes[0] == 12);
+        // trigger repeats via hold + knob 1
+        r.c.padDown(2, 2, r.t); r.t += 600; r.c.encoderTurn(0, 2, r.t); r.c.padUp(2, 2, r.t); r.t += 400;
+        CCHECK(pat.tracks[1].steps[2].repeats == 3);
+        // trigger section length with END
+        r.hold(Btn::End); r.tap(7, 3); r.release(Btn::End);
+        CCHECK(pat.tracks[1].end == 23);
+        Frame f; r.c.render(f, r.t);
+        CCHECK(f.line1.rfind("Notes", 0) == 0);
+    }
     return cfail;
 }

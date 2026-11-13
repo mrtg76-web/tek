@@ -69,6 +69,16 @@ int main() {
                 auto& tr = proc.project().seqs[0].pat().tracks[0];
                 tr.steps[6].active = true; tr.steps[6].numNotes = 1; tr.steps[6].notes[0] = 3; tr.steps[6].tie = 2;
                 tr.steps[10].active = true; tr.steps[10].numNotes = 1; tr.steps[10].notes[0] = 5;
+                if (juce::SystemStats::getEnvironmentVariable("TEK_SNAP_DOMI", "").isNotEmpty()) {
+                    auto& q = proc.project().seqs[0];
+                    q.mode = tek::Mode::Domino; q.scale = 1;
+                    auto& nt = q.pat().tracks[0]; auto& tt = q.pat().tracks[1];
+                    nt.end = 11; tt.end = 31;
+                    for (int i : {0, 2, 3, 5, 8, 9}) { nt.steps[(size_t) i].active = true; nt.steps[(size_t) i].numNotes = 1; nt.steps[(size_t) i].notes[0] = (int8_t) (i % 5); }
+                    for (int i : {0, 3, 6, 8, 11, 14, 16, 19, 24, 27}) { tt.steps[(size_t) i].active = true; tt.steps[(size_t) i].numNotes = 1; }
+                    tt.steps[8].tie = 2; tt.steps[9].active = false; tt.steps[10].active = false;
+                    proc.controller().padDown(2, 0, 0);
+                }
                 if (juce::SystemStats::getEnvironmentVariable("TEK_SNAP_MATR", "").isNotEmpty()) {
                     auto& q = proc.project().seqs[0];
                     q.mode = tek::Mode::Matr;

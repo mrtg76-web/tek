@@ -17,9 +17,9 @@ constexpr int kNumTracks = 8;
 constexpr int kMaxPolyNotes = 7;
 constexpr int kNumGrooves = 14;
 
-enum class Mode : uint8_t { Mono = 0, Poly, Multi, Chord, Stoch, Matr, Count };
+enum class Mode : uint8_t { Mono = 0, Poly, Multi, Chord, Stoch, Matr, Domino, Count };
 inline const char* modeLabel(Mode m) {
-    switch (m) { case Mode::Mono: return "MONO"; case Mode::Poly: return "POLY"; case Mode::Multi: return "MULT"; case Mode::Chord: return "CHRD"; case Mode::Stoch: return "STCH"; case Mode::Matr: return "MATR"; default: return "?"; }
+    switch (m) { case Mode::Mono: return "MONO"; case Mode::Poly: return "POLY"; case Mode::Multi: return "MULT"; case Mode::Chord: return "CHRD"; case Mode::Stoch: return "STCH"; case Mode::Matr: return "MATR"; case Mode::Domino: return "DOMI"; default: return "?"; }
 }
 
 enum class Dir : uint8_t { Forward = 0, Reverse, Pendulum, Pong, Random, Drunk, Count };
@@ -180,6 +180,7 @@ struct Sequencer {
     int8_t timeBend = 0;           // -120..120 = -12.0..+12.0 %
     uint8_t bassMode = 0;          // chord mode bass note: 0 Off, 1 On (same channel), 2..17 = channel 1..16
     uint8_t chMx = 0;              // channel multiplex: 0 Off, 1 On (voice n -> channel + n)
+    uint8_t voice = 1;             // domino: 0 Mono, 1 Poly (tracks[0] = 32 note steps, tracks[1] = 64 trigger steps)
     bool active = true;            // inactive = transport stopped for this seq
     bool muted = false;            // muted = runs but silent
     uint8_t curPattern = 0;

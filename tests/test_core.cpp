@@ -357,6 +357,36 @@ static void testMatriceal() {
     int cnt = 0; for (int i = 0; i < 8; ++i) cnt += e16[i]; CHECK(cnt == 3 && e16[0]);
 }
 
+static void testDomino() {
+    auto p = std::make_unique<Project>();
+    auto& q = p->seqs[0];
+    q.mode = Mode::Domino;
+    auto& noteT = q.pat().tracks[0];
+    auto& trigT = q.pat().tracks[1];
+    trigT.end = 3; noteT.end = 2;
+    for (int i : {0, 2}) { trigT.steps[(size_t) i].active = true; trigT.steps[(size_t) i].numNotes = 1; }
+    for (int i = 0; i < 3; ++i) setNote(noteT, i, i * 2);
+    Engine e(*p);
+    auto n = ons(run(e, 2.0));
+    CHECK(n.size() == 4);
+    if (n.size() == 4) { CHECK(n[0].note == 48); CHECK(n[1].note == 50); CHECK(n[2].note == 52); CHECK(n[3].note == 48);
+                         CHECK(std::fabs(n[1].ppq - 0.5) < 0.01); }
+    // a trigger repeat advances the note section too
+    trigT.steps[0].repeats = 3; trigT.steps[0].repDur = 1;
+    Engine e2(*p);
+    auto n2 = ons(run(e2, 0.4));
+    CHECK(n2.size() == 3);
+    if (n2.size() == 3) { CHECK(n2[0].note == 48); CHECK(n2[1].note == 50); CHECK(n2[2].note == 52); }
+    // mono voice plays only the first note of a chord step
+    trigT.steps[0].repeats = 1;
+    noteT.steps[0].numNotes = 3; noteT.steps[0].notes = {0, 4, 7, 0, 0, 0, 0};
+    Engine e3(*p);
+    CHECK(ons(run(e3, 0.2)).size() == 3);
+    q.voice = 0;
+    Engine e4(*p);
+    CHECK(ons(run(e4, 0.2)).size() == 1);
+}
+
 int runControllerTests(); // defined in test_controller.cpp
 
 int main() {
@@ -373,6 +403,7 @@ int main() {
     testChords();
     testStochastic();
     testMatriceal();
+    testDomino();
     failures += runControllerTests();
     if (failures == 0) std::printf("ALL TESTS PASSED\n");
     else std::printf("%d FAILURE(S)\n", failures);

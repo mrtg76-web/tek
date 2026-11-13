@@ -1,8 +1,23 @@
-# TEK — 8 kanallı performans sequencer'ı (Faz 1 + Faz 2: Chord, Stochastic, Matriceal)
+# TEK — 8 kanallı performans sequencer'ı (Faz 1 + Faz 2: Chord, Stochastic, Matriceal, Domino)
 
 TEK, OXI ONE MKII kılavuzunu temel alan bir VST3/AU sequencer plugin'i. Ses üretmiyor, MIDI üretiyor. Ableton'daki synth'leri, drum rack'leri ve harici cihazları sürüyor.
 
-## Faz 2: Matriceal modu (yeni)
+## Faz 2: Domino modu (yeni)
+
+Setup'ta knob 4 ile **DOMI** seç. Grid üç bölüme ayrılır:
+
+- **Üst 2 sıra, nota bölümü (32 adım):** Boş adıma dokununca son seçilen nota girilir. Dolu adıma dokununca silinir. Adımı basılı tutup (veya sağ tıklayıp) klavyeden bir tuşa basınca o nota girilir. Poly modunda en fazla 4 notalık akor olur: tuşa tekrar basmak notayı çıkarır.
+- **Orta 4 sıra, trigger bölümü (64 adım):** Dokununca trigger açılır/kapanır. Basılı tutarken knob 1 = repeat sayısı, knob 2 = süre, knob 3 = Rpt%, knob 4 = Trig koşulu.
+- **Alt 2 sıra, klavye:** Ölçekteki notalar; alt sıra temel oktav, üst sıra bir üst oktav. Üst sıranın 13. ve 14. pad'leri klavyeyi oktav oktav kaydırır (sarı/mavi). Sağdaki gri pad'ler girilecek notanın velocity'sini seçer.
+
+Nasıl çalışır: her trigger, ve her trigger repeat'i, nota bölümünü bir adım ilerletir. Melodiyi nota bölümü, ritmi trigger bölümü belirler. İki bölümün uzunluğu INIT/END + pad ile ayrı ayrı ayarlanır.
+
+- **Tie:** Bir adımı basılı tut, aynı bölümde daha sonraki bir adıma dokun.
+- **Mono/Poly ve ChMx:** Setup sayfa 3'te. Mono modda akorun yalnızca ilk notası çalar.
+- **Track menüsü:** trigger bölümünün division'ını ve yönünü ayarlar.
+- **Not:** Kılavuzda nota adımları için anlatılan accumulator, Accumulator özelliğiyle birlikte ekleneceği için bu sürümde yok.
+
+## Faz 2: Matriceal modu
 
 Setup'ta knob 4 ile **MATR** seç. Grid 4 dikey bölüme ayrılır, her bölüm bir iz (4 sütun genişliğinde):
 
