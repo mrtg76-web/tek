@@ -56,7 +56,8 @@ if(TEK_BUILD_PLUGIN)
 
     target_sources(TEK PRIVATE
         plugin/PluginProcessor.cpp
-        plugin/PluginEditor.cpp)
+        plugin/PluginEditor.cpp
+        plugin/WebControl.cpp)
 
     target_compile_definitions(TEK PUBLIC
         JUCE_WEB_BROWSER=0
@@ -84,7 +85,7 @@ if(TEK_BUILD_PLUGIN)
     option(TEK_BUILD_PLUGIN_TEST "Build the processor smoke test" OFF)
     if(TEK_BUILD_PLUGIN_TEST)
         juce_add_console_app(tek_plugin_test PRODUCT_NAME "tek_plugin_test")
-        target_sources(tek_plugin_test PRIVATE tests/test_plugin.cpp plugin/PluginProcessor.cpp plugin/PluginEditor.cpp)
+        target_sources(tek_plugin_test PRIVATE tests/test_plugin.cpp plugin/PluginProcessor.cpp plugin/PluginEditor.cpp plugin/WebControl.cpp)
         target_compile_definitions(tek_plugin_test PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JucePlugin_Name="TEK"
             JucePlugin_IsSynth=1 JucePlugin_WantsMidiInput=1 JucePlugin_ProducesMidiOutput=1 JucePlugin_IsMidiEffect=0)
         if(UNIX AND NOT APPLE)

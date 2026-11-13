@@ -62,6 +62,77 @@ int main() {
         check(state == state2, "state round trip");
         check(proc2.project().seqs[0].pat().tracks[0].steps[4].active, "restored step");
 
+        // ---- touch controller: page, websocket handshake, input and frames
+        {
+            check(WebControl::acceptKey("dGhlIHNhbXBsZSBub25jZQ==") == "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=", "websocket accept key (RFC 6455 example)");
+            auto* w = proc.webControl();
+            check(w != nullptr && w->port() >= 8765, "web server listening");
+            if (w != nullptr && w->port() > 0) {
+                juce::StreamingSocket http;
+                check(http.connect("127.0.0.1", w->port(), 2000), "http connect");
+                juce::String get = "GET / HTTP/1.1\r\nHost: x\r\n\r\n";
+                http.write(get.toRawUTF8(), (int) get.getNumBytesAsUTF8());
+                juce::MemoryBlock got;
+                char buf[4096];
+                for (int i = 0; i < 200; ++i) { if (http.waitUntilReady(true, 50) > 0) { int n = http.read(buf, sizeof buf, false); if (n <= 0) break; got.append(buf, (size_t) n); } }
+                check(got.toString().contains("<title>TEK</title>"), "page served");
+
+                juce::StreamingSocket ws;
+                check(ws.connect("127.0.0.1", w->port(), 2000), "ws connect");
+                juce::String hs = "GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
+                ws.write(hs.toRawUTF8(), (int) hs.getNumBytesAsUTF8());
+                juce::String resp;
+                for (int i = 0; i < 4000 && !resp.contains("\r\n\r\n"); ++i) if (ws.waitUntilReady(true, 50) > 0) { char ch; if (ws.read(&ch, 1, true) == 1) resp += juce::String::charToString(ch); }
+                if (!resp.contains("s3pPLM")) std::printf("resp=[%s]\n", resp.toRawUTF8());
+                check(resp.contains("101") && resp.contains("s3pPLMBiTxaQ9kYGzzhZRbK+xOo="), "websocket upgrade");
+                auto sendMsg = [&](const juce::String& m) {
+                    std::vector<uint8_t> f = {0x81, (uint8_t) (0x80 | m.length()), 1, 2, 3, 4};
+                    for (int i = 0; i < m.length(); ++i) f.push_back((uint8_t) (m[i] ^ f[2 + (i % 4)]));
+                    ws.write(f.data(), (int) f.size());
+                };
+                {
+                    const juce::SpinLock::ScopedLockType sl(proc.lock);
+                    proc.project().seqs[0].pat().tracks[0].steps[9].clear();
+                }
+                sendMsg("pd 9 7");
+                juce::Thread::sleep(60);
+                sendMsg("pu 9 7");
+                bool frameSeen = false;
+                for (int i = 0; i < 40 && !frameSeen; ++i) {
+                    if (ws.waitUntilReady(true, 50) > 0) {
+                        uint8_t h[4];
+                        if (ws.read(h, 2, true) != 2) break;
+                        int n = h[1] & 0x7f;
+                        if (n == 126) { ws.read(h + 2, 2, true); n = h[2] << 8 | h[3]; }
+                        std::vector<char> pl((size_t) n);
+                        ws.read(pl.data(), n, true);
+                        frameSeen = n > 0 && pl[0] == 'F';
+                    }
+                }
+                check(frameSeen, "frame received");
+                juce::Thread::sleep(100);
+                const juce::SpinLock::ScopedLockType sl(proc.lock);
+                check(proc.project().seqs[0].pat().tracks[0].steps[9].active, "tap from the touch controller placed a step");
+            }
+        }
+
+        if (int secs = juce::SystemStats::getEnvironmentVariable("TEK_SERVE", "0").getIntValue(); secs > 0) {
+            // keep serving the touch page (with the transport running) for a browser test
+            {
+                const juce::SpinLock::ScopedLockType sl(proc.lock);
+                auto& tr = proc.project().seqs[0].pat().tracks[0];
+                for (int i : {2, 5, 7, 11, 13}) { tr.steps[(size_t) i].active = true; tr.steps[(size_t) i].numNotes = 1; tr.steps[(size_t) i].notes[0] = (int8_t) (i % 6); }
+            }
+            ph.playing = true;
+            juce::AudioBuffer<float> a2(2, 512);
+            const double end = juce::Time::getMillisecondCounterHiRes() + secs * 1000.0;
+            std::printf("serving on %s\n", proc.webUrl().toRawUTF8());
+            while (juce::Time::getMillisecondCounterHiRes() < end) {
+                juce::MidiBuffer mb; proc.processBlock(a2, mb); ph.ppq += 512.0 * 2.0 / 48000.0;
+                juce::Thread::sleep(10);
+            }
+        }
+
         if (juce::SystemStats::getEnvironmentVariable("TEK_SNAPSHOT", "").isNotEmpty()) {
             // render the editor to a PNG for a visual check
             {

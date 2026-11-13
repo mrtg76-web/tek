@@ -6,6 +6,7 @@ TekProcessor::TekProcessor()
     proj = std::make_unique<tek::Project>();
     eng = std::make_unique<tek::Engine>(*proj);
     ctrl = std::make_unique<tek::Controller>(*proj, *eng);
+    web = std::make_unique<WebControl>(*this); // touch controller (iPad) on the local network
     midiIn.reserve(512);
     midiOut.reserve(4096);
     portBuffer.ensureSize(4096 * 3);
@@ -17,6 +18,7 @@ TekProcessor::TekProcessor()
 }
 
 TekProcessor::~TekProcessor() {
+    web.reset();
     if (virtualOut) {
         virtualOut->stopBackgroundThread();
         for (int ch = 1; ch <= 16; ++ch) virtualOut->sendMessageNow(juce::MidiMessage::allNotesOff(ch));

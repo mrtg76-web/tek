@@ -2,7 +2,24 @@
 
 TEK, OXI ONE MKII kılavuzunu temel alan bir VST3/AU sequencer plugin'i. Ses üretmiyor, MIDI üretiyor. Ableton'daki synth'leri, drum rack'leri ve harici cihazları sürüyor.
 
-## Faz 2: Accumulator, Harmonizer, ChMx (yeni)
+## iPad dokunmatik controller (yeni)
+
+TEK, açıldığı bilgisayarda küçük bir web sunucusu başlatır. iPad, iPhone veya başka bir tablet aynı Wi-Fi ağındaysa TEK'i dokunmatik olarak, çoklu dokunmayla kontrol edebilir.
+
+1. TEK penceresinin alt satırında bir adres yazar, örneğin **iPad: http://192.168.1.20:8765**.
+2. iPad'de **Safari**'yi açıp bu adrese git.
+3. Paylaş düğmesi → **Ana Ekrana Ekle** dersen TEK, tam ekran açılan bir uygulama simgesi olur.
+4. İlk seferde macOS "Ableton Live gelen ağ bağlantılarını kabul etsin mi?" diye sorabilir. **İzin Ver** de.
+
+Kullanım:
+- Gerçek cihazdaki gibi: bir parmakla pad'i basılı tut, diğer parmakla knob'u çevir (yukarı/aşağı kaydır).
+- SHIFT, MUTE, COPY, INIT gibi tuşları basılı tutup başka bir yere dokunabilirsin.
+- Bir pad'den aynı satırda başka bir pad'e kaydırmak tie yapar.
+- Ekran, LED'ler ve grid canlı güncellenir. Bilgisayardaki pencereyle aynı anda kullanılabilir.
+- Birden fazla TEK açıksa her biri sırayla 8766, 8767… portlarını kullanır. Adres her pencerede ayrı yazar.
+- Bağlantı koparsa sayfa kendiliğinden yeniden bağlanır. Sol üstteki durum yazısı "connected" olmalı.
+
+## Faz 2: Accumulator, Harmonizer, ChMx
 
 **Accumulator** (Mono, Poly, Domino, Saga): Step her çaldığında notası ayarlanan aralık kadar kayar.
 - **Açma:** Step'i basılı tutup PAGE ile accumulator sayfasına git. Mono/Poly'de sayfa 4–5, Domino'da 3–4, Saga'da 4–5.

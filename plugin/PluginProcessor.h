@@ -2,6 +2,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_audio_devices/juce_audio_devices.h>
 #include "Controller.h"
+#include "WebControl.h"
 
 class TekProcessor : public juce::AudioProcessor {
 public:
@@ -38,12 +39,16 @@ public:
     tek::Engine& engine() { return *eng; }
     tek::Controller& controller() { return *ctrl; }
     bool hasVirtualPort() const { return virtualOut != nullptr; }
+    juce::String webUrl() const { return web ? web->url() : juce::String(); }
+    int webClients() const { return web ? web->numClients() : 0; }
+    WebControl* webControl() { return web.get(); }
 
 private:
     std::unique_ptr<tek::Project> proj;
     std::unique_ptr<tek::Engine> eng;
     std::unique_ptr<tek::Controller> ctrl;
     std::unique_ptr<juce::MidiOutput> virtualOut;
+    std::unique_ptr<WebControl> web;
     std::vector<tek::MidiIn> midiIn;
     std::vector<tek::MidiOut> midiOut;
     juce::MidiBuffer portBuffer;

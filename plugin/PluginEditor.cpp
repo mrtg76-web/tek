@@ -385,6 +385,8 @@ void TekEditor::paint(juce::Graphics& g) {
     g.setFont(sans(11.0f));
     g.setColour(juce::Colour(0xff8a8e94));
     juce::String port = proc.hasVirtualPort() ? "MIDI port 'TEK Out' active" : "no virtual port (use HOST output)";
-    g.drawText("TEK  |  " + port + "  |  right-click = hold pad/button  |  keys: Shift, 1-8, Q/A W/S E/D R/F = knobs, M mute, C/V copy/paste, I/O init/end, T track, P page, Z undo",
+    juce::String web = proc.webUrl();
+    juce::String touch = web.isEmpty() ? "touch controller off" : "iPad: " + web + (proc.webClients() > 0 ? "  (" + juce::String(proc.webClients()) + " connected)" : "");
+    g.drawText("TEK  |  " + port + "  |  " + touch + "  |  right-click = hold  |  keys: Shift, 1-8, Q/A W/S E/D R/F knobs",
                juce::Rectangle<float>(kSeqX, kH - 40.0f, kW - kSeqX - 20.0f, 20.0f), juce::Justification::left);
 }
