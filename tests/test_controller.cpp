@@ -248,5 +248,23 @@ int runControllerTests() {
         Frame f; r.c.render(f, r.t);
         CCHECK(f.line1.rfind("Notes", 0) == 0);
     }
+    { // saga: tap outside the track sets length, hold + knob 4 sets stage duration
+        Rig r;
+        r.p->seqs[0].mode = Mode::Saga;
+        auto& tr = r.tr0();
+        r.tap(3, 1);                       // stage 20 -> track length 1-20
+        CCHECK(tr.end == 19 && !tr.steps[19].active);
+        r.tap(2, 0);                       // activate stage 3
+        CCHECK(tr.steps[2].active && tr.steps[2].numNotes == 1);
+        r.c.padDown(2, 0, r.t); r.t += 600;
+        r.c.encoderTurn(3, 3, r.t);        // dur 4
+        r.tap(4, 7);                       // add a keyboard note -> chord
+        r.c.padUp(2, 0, r.t); r.t += 400;
+        CCHECK(tr.steps[2].dur == 4 && tr.steps[2].numNotes == 2);
+        r.tap(2, 0);                       // deactivate keeps the duration
+        CCHECK(!tr.steps[2].active && tr.steps[2].dur == 4);
+        Frame f; r.c.render(f, r.t);
+        CCHECK(f.line1.find("T.Durat:23") != std::string::npos);
+    }
     return cfail;
 }

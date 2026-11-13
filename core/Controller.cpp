@@ -104,7 +104,7 @@ void Controller::placeNote(Track& tr, int idx, int degree) {
 
 void Controller::toggleStep(int x, int y, double nowMs) {
     if (isMatr()) { matTap(x, y, nowMs); return; }
-    if (isDomino()) { domTap(x, y, nowMs); return; }
+    if (hasKeys()) { domTap(x, y, nowMs); return; }
     pushUndo();
     if (lanesView()) {
         int t = 7 - y;
@@ -195,7 +195,7 @@ void Controller::padDown(int x, int y, double nowMs) {
     if (grid == GridMode::Column) { columnPad(x, y, nowMs); return; }
 
     if (isMatr()) { matPadDown(x, y, nowMs); return; }
-    if (isDomino()) { domPadDown(x, y, nowMs); return; }
+    if (hasKeys()) { domPadDown(x, y, nowMs); return; }
     const int idx = stepAt(x);
     // track selection in multitrack lanes (column 1 selects, other columns select + edit)
     if (lanesView() && !held(Btn::Mute)) {
@@ -629,7 +629,7 @@ void Controller::domPadDown(int x, int y, double nowMs) {
             const int deg = x + (y == 6 ? n : 0) + domOct[(size_t) sel] * n;
             bool applied = false;
             for (auto& h : heldPads) {
-                if (h.y > 1) continue;
+                if (h.y >= noteRows()) continue;
                 if (!applied) pushUndo();
                 applied = true;
                 h.consumed = true;
@@ -650,14 +650,15 @@ void Controller::domPadDown(int x, int y, double nowMs) {
         heldPads.push_back({x, y, nowMs, true});
         return;
     }
-    const bool isNote = y <= 1;
+    const bool isNote = y < noteRows();
     auto& tr = isNote ? noteT : trigT;
     const int idx = isNote ? y * 16 + x : (y - 2) * 16 + x;
+    const int maxIdx = isSaga() ? 95 : (isNote ? 31 : 63);
     if (held(Btn::Init) || held(Btn::End)) {
         pushUndo();
-        if (held(Btn::Init)) { int len = tr.end - tr.start; tr.start = (uint8_t) idx; if (tr.start > tr.end) tr.end = (uint8_t) std::min(isNote ? 31 : 63, idx + len); btnConsumed[(int) Btn::Init] = true; }
+        if (held(Btn::Init)) { int len = tr.end - tr.start; tr.start = (uint8_t) idx; if (tr.start > tr.end) tr.end = (uint8_t) std::min(maxIdx, idx + len); btnConsumed[(int) Btn::Init] = true; }
         else { tr.end = (uint8_t) idx; if (tr.end < tr.start) tr.start = tr.end; btnConsumed[(int) Btn::End] = true; }
-        msg(std::string(isNote ? "NOTES " : "TRIGS ") + std::to_string(tr.start + 1) + "-" + std::to_string(tr.end + 1), nowMs);
+        msg(std::string(isSaga() ? "STAGES " : isNote ? "NOTES " : "TRIGS ") + std::to_string(tr.start + 1) + "-" + std::to_string(tr.end + 1), nowMs);
         heldPads.push_back({x, y, nowMs, true});
         return;
     }
@@ -669,7 +670,7 @@ void Controller::domPadDown(int x, int y, double nowMs) {
         return;
     }
     for (auto& h : heldPads) { // tie: hold first + tap a later pad of the same section
-        bool hNote = h.y <= 1;
+        bool hNote = h.y < noteRows();
         if (h.y >= 6 || hNote != isNote) continue;
         int a = hNote ? h.y * 16 + h.x : (h.y - 2) * 16 + h.x;
         if (idx > a && tr.steps[(size_t) a].active) {
@@ -689,12 +690,17 @@ void Controller::domTap(int x, int y, double nowMs) {
     if (y >= 6) return;
     auto& pat = seq().pat();
     pushUndo();
-    if (y <= 1) {
+    if (y < noteRows()) {
         auto& noteT = pat.tracks[0];
         const int idx = y * 16 + x;
         auto& st = noteT.steps[(size_t) idx];
-        if (st.active) { st.clear(); return; }
-        Step f; f.velocity = (uint8_t) kDomVels[domVel[(size_t) sel]]; f.gate = noteT.defGate;
+        if (isSaga() && (idx > noteT.end || idx < noteT.start)) { // tap outside the track sets its length
+            if (idx > noteT.end) noteT.end = (uint8_t) idx; else noteT.start = (uint8_t) idx;
+            msg("STAGES " + std::to_string(noteT.start + 1) + "-" + std::to_string(noteT.end + 1), nowMs);
+            return;
+        }
+        if (st.active) { uint8_t d = st.dur; st.clear(); st.dur = d; return; }
+        Step f; f.velocity = (uint8_t) kDomVels[domVel[(size_t) sel]]; f.gate = noteT.defGate; f.dur = st.dur;
         st = f; st.active = true;
         const auto& last = domLast[(size_t) sel];
         if (last.empty()) { st.numNotes = 1; st.notes[0] = 0; }
@@ -710,6 +716,29 @@ void Controller::domTap(int x, int y, double nowMs) {
 void Controller::domKnob(int knob, int delta, double nowMs) {
     auto& pat = seq().pat();
     pushUndo();
+    if (isSaga()) {
+        for (auto& h : heldPads) {
+            if (h.y >= 6) continue;
+            h.consumed = true;
+            auto& st = pat.tracks[0].steps[(size_t) (h.y * 16 + h.x)];
+            if (stepPage == 0) {
+                if (knob == 0) st.velocity = clampT<uint8_t>(st.velocity + delta, 1, 127);
+                if (knob == 1) { if (!st.numNotes) { st.numNotes = 1; st.notes[0] = 0; } for (int i = 0; i < st.numNotes; ++i) st.notes[(size_t) i] = clampT<int8_t>(st.notes[(size_t) i] + delta, -60, 60); }
+                if (knob == 2) st.gate = clampT<uint8_t>(st.gate + delta, 2, kGateLegato);
+                if (knob == 3) st.dur = clampT<uint8_t>(st.dur + delta, 1, 32);
+            } else if (stepPage == 1) {
+                if (knob == 0) st.offset = clampT<int8_t>(st.offset + delta, 0, 45);
+                if (knob == 1) st.rng = clampT<int8_t>(st.rng + delta, 0, 24);
+                if (knob == 2) st.trig = trigFromListIndex(trigToListIndex(st.trig) + delta);
+                if (knob == 3) st.repeats = clampT<uint8_t>(st.repeats + delta, 1, 15);
+            } else {
+                if (knob == 0) st.repDur = clampT<uint8_t>(st.repDur + delta, 1, 15);
+                if (knob == 1) st.repProb = clampT<uint8_t>(st.repProb + delta * 5, 0, 100);
+                if (knob == 2) st.octave = clampT<int8_t>(st.octave + delta, -4, 4);
+            }
+        }
+        return;
+    }
     for (auto& h : heldPads) {
         if (h.y >= 6) continue;
         h.consumed = true;
@@ -773,7 +802,7 @@ void Controller::renderDomino(Frame& f) const {
     // keyboard
     const int n = (int) scaleLibrary()[q.scale].intervals.size();
     std::vector<int> shown = domLast[(size_t) sel];
-    for (auto& h : heldPads) if (h.y <= 1) { const auto& st = noteT.steps[(size_t) (h.y * 16 + h.x)]; shown.assign(st.notes.begin(), st.notes.begin() + st.numNotes); }
+    for (auto& h : heldPads) if (h.y < noteRows()) { const auto& st = noteT.steps[(size_t) (h.y * 16 + h.x)]; shown.assign(st.notes.begin(), st.notes.begin() + st.numNotes); }
     for (int y = 6; y < 8; ++y)
         for (int x = 0; x < 16; ++x) {
             uint32_t c = 0;
@@ -817,6 +846,49 @@ void Controller::renderDominoDisplay(Frame& f) const {
         f.line2 = st.tie ? "Tie " + std::to_string(st.tie + 1) : "";
         set("Rept", std::to_string(st.repeats), "Durat", "x" + std::to_string(st.repDur), "Rpt%", std::to_string(st.repProb), "Trig", trigLabel(st.trig));
     }
+}
+
+// ============================================================================ saga (manual 6.11)
+void Controller::renderSaga(Frame& f) const {
+    renderDomino(f); // keyboard rows 6-7 are shared with domino
+    const auto& q = seq();
+    const auto& tr = q.pat().tracks[0];
+    const uint32_t col = seqColor(q.color);
+    const int ph = eng.isRunning() ? eng.playhead(sel, 0) : -1;
+    const bool showRange = held(Btn::Init) || held(Btn::End);
+    for (int i = 0; i < 96; ++i) {
+        const auto& st = tr.steps[(size_t) i];
+        const bool in = i >= tr.start && i <= tr.end;
+        uint32_t c = in ? 0x401018 : 0;
+        if (showRange && (i == tr.start || i == tr.end)) c = 0x5a3a80;
+        for (int k = std::max(0, i - 95); k < i; ++k) { const auto& s2 = tr.steps[(size_t) k]; if (s2.active && s2.tie > 0 && k + s2.tie >= i) c = 0x707070; }
+        if (st.active) c = st.muted ? 0x4a1d5a : dim(col, in ? (0.55f + 0.45f * std::min(1.0f, st.dur / 8.0f)) : 0.3f);
+        if (i == ph) c = mix(c, 0xffffff, 0.55f);
+        f.pads[(size_t) ((i / 16) * 16 + i % 16)] = c;
+    }
+}
+
+void Controller::renderSagaDisplay(Frame& f) const {
+    const auto& q = seq();
+    const auto& tr = q.pat().tracks[0];
+    int total = 0;
+    for (int i = tr.start; i <= tr.end; ++i) total += std::max<int>(1, tr.steps[(size_t) i].dur);
+    auto set = [&](const char* a, const std::string& av, const char* b, const std::string& bv, const char* c, const std::string& cv, const char* d, const std::string& dv) {
+        f.labels = {a, b, c, d}; f.values = {av, bv, cv, dv};
+    };
+    f.line1 = "Stages " + std::to_string(tr.start + 1) + "-" + std::to_string(tr.end + 1) + "  T.Durat:" + std::to_string(total) + "  " + divisionLabel(tr.div);
+    f.line2 = std::string(q.voice ? "POLY" : "MONO") + "  keys oct " + std::to_string(domOct[(size_t) sel]);
+    const HeldPad* h = nullptr;
+    for (auto& hp : heldPads) if (hp.y < 6) { h = &hp; break; }
+    if (!h) return;
+    const int idx = h->y * 16 + h->x;
+    const auto& st = tr.steps[(size_t) idx];
+    std::string nm = st.numNotes ? noteName(q.baseMidi() + degreeToSemis(q.scale, st.notes[0]) + st.octave * 12) + (st.numNotes > 1 ? "+" + std::to_string(st.numNotes - 1) : "") : "-";
+    f.line1 = "Stg" + std::to_string(idx + 1) + "  T.Durat:" + std::to_string(total) + "  " + std::to_string(stepPage + 1) + "/3";
+    f.line2 = st.active ? "hold + key: add/remove note" : "inactive stage (tap to activate)";
+    if (stepPage == 0) set("Vel", std::to_string(st.velocity), "Note", nm, "Gate", st.gate >= kGateLegato ? "LEG" : std::to_string(st.gate) + "%", "Durat", std::to_string(st.dur));
+    else if (stepPage == 1) set("Offst", std::to_string(st.offset) + "%", "Rng", std::to_string(st.rng) + "iv", "Trig", trigLabel(st.trig), "Rept", std::to_string(st.repeats));
+    else set("RDur", "x" + std::to_string(st.repDur), "Rpt%", std::to_string(st.repProb), "Oct", std::to_string(st.octave), "-", "");
 }
 
 // ============================================================================ encoders
@@ -967,8 +1039,8 @@ void Controller::editMenu(int knob, int delta, double nowMs) {
             } else {
                 if (knob == 0) { if (q.mode == Mode::Poly) q.nVoices = clampT<uint8_t>(q.nVoices + delta, 1, 7);
                                  else if (isMulti()) tr.swing = (uint8_t) (tr.swing == 0 ? (delta > 0 ? 10 : 0) : (tr.swing + delta < 10 ? 0 : std::min(90, tr.swing + delta))); }
-                if (knob == 1 && (q.mode == Mode::Poly || q.mode == Mode::Chord || q.mode == Mode::Domino)) q.chMx = clampT<uint8_t>(q.chMx + delta, 0, 1);
-                if (knob == 0 && q.mode == Mode::Domino) q.voice = clampT<uint8_t>(q.voice + delta, 0, 1);
+                if (knob == 1 && (q.mode == Mode::Poly || q.mode == Mode::Chord || q.mode == Mode::Domino || q.mode == Mode::Saga)) q.chMx = clampT<uint8_t>(q.chMx + delta, 0, 1);
+                if (knob == 0 && (q.mode == Mode::Domino || q.mode == Mode::Saga)) q.voice = clampT<uint8_t>(q.voice + delta, 0, 1);
                 if (knob == 3) q.color = clampT<uint8_t>(q.color + delta, 0, 7);
             }
             break;
@@ -1050,7 +1122,7 @@ void Controller::encoderTurn(int knob, int delta, double nowMs) {
     if (knob < 0 || knob > 3 || delta == 0) return;
     if (encDown[(size_t) knob]) encConsumed[(size_t) knob] = true;
     if (isMatr() && grid == GridMode::Steps && !heldPads.empty() && menu == Menu::None) { matKnob(knob, delta, nowMs); return; }
-    if (isDomino() && grid == GridMode::Steps && !heldPads.empty() && menu == Menu::None) { domKnob(knob, delta, nowMs); return; }
+    if (hasKeys() && grid == GridMode::Steps && !heldPads.empty() && menu == Menu::None) { domKnob(knob, delta, nowMs); return; }
     if (grid == GridMode::Steps && !heldPads.empty() && menu == Menu::None) { editHeldSteps(knob, delta, nowMs); return; }
     if (held(Btn::Init) || held(Btn::End)) {
         btnConsumed[(int) Btn::Init] = btnConsumed[(int) Btn::End] = true;
@@ -1451,9 +1523,9 @@ void Controller::renderDisplay(Frame& f, double nowMs) const {
             f.line2 = "In/Bnk/PC: stored, used in phase 3";
         } else {
             std::string a = q.mode == Mode::Poly ? std::to_string(q.nVoices) : isMulti() ? (tr.swing == 0 ? "Same" : std::to_string(tr.swing)) : "-";
-            bool mx = q.mode == Mode::Poly || q.mode == Mode::Chord || q.mode == Mode::Domino;
-            if (isDomino()) a = q.voice ? "Poly" : "Mono";
-            set(q.mode == Mode::Poly ? "nVoice" : isMulti() ? "T.Swg" : isDomino() ? "Voice" : "-", a, mx ? "ChMx" : "-", mx ? (q.chMx ? "On" : "Off") : "", "-", "", "Color", std::to_string(q.color + 1));
+            bool mx = q.mode == Mode::Poly || q.mode == Mode::Chord || hasKeys();
+            if (hasKeys()) a = q.voice ? "Poly" : "Mono";
+            set(q.mode == Mode::Poly ? "nVoice" : isMulti() ? "T.Swg" : hasKeys() ? "Voice" : "-", a, mx ? "ChMx" : "-", mx ? (q.chMx ? "On" : "Off") : "", "-", "", "Color", std::to_string(q.color + 1));
         }
     } else if (menu == Menu::TrackM) {
         if (isMatr()) {
@@ -1527,6 +1599,7 @@ void Controller::renderDisplay(Frame& f, double nowMs) const {
     }
     if (isMatr() && menu == Menu::None && grid == GridMode::Steps) renderMatrDisplay(f);
     if (isDomino() && menu == Menu::None && grid == GridMode::Steps && !held(Btn::Shift)) renderDominoDisplay(f);
+    if (isSaga() && menu == Menu::None && grid == GridMode::Steps && !held(Btn::Shift)) renderSagaDisplay(f);
     if (nowMs < messageUntil) f.message = message;
 }
 
@@ -1689,7 +1762,7 @@ void Controller::render(Frame& f, double nowMs) const {
     f.labels = {}; f.values = {}; f.message.clear();
 
     // follow the playhead page
-    if (follow && eng.isRunning() && grid != GridMode::Load && !isDomino() && !isMatr() && !isStoch()) {
+    if (follow && eng.isRunning() && grid != GridMode::Load && !hasKeys() && !isMatr() && !isStoch()) {
         int ph = eng.playhead(sel, trackIndex());
         if (ph >= 0) const_cast<Controller*>(this)->page[(size_t) sel] = ph / 16;
     }
@@ -1700,6 +1773,7 @@ void Controller::render(Frame& f, double nowMs) const {
     else if (isStoch()) renderStoch(f);
     else if (isMatr()) renderMatr(f);
     else if (isDomino()) renderDomino(f);
+    else if (isSaga()) renderSaga(f);
     else renderSteps(f, nowMs);
     renderDisplay(f, nowMs);
 

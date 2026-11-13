@@ -387,6 +387,32 @@ static void testDomino() {
     CHECK(ons(run(e4, 0.2)).size() == 1);
 }
 
+static void testSaga() {
+    auto p = std::make_unique<Project>();
+    auto& q = p->seqs[0];
+    q.mode = Mode::Saga;
+    auto& tr = q.pat().tracks[0];
+    tr.end = 2;
+    setNote(tr, 0, 0); setNote(tr, 1, 2); setNote(tr, 2, 4);
+    tr.steps[1].dur = 3; tr.steps[2].dur = 2;     // cycle = 1 + 3 + 2 = 6 sixteenths
+    Engine e(*p);
+    auto n = ons(run(e, 3.0));
+    CHECK(n.size() == 6);
+    if (n.size() == 6) {
+        CHECK(std::fabs(n[0].ppq - 0.0) < 0.01); CHECK(std::fabs(n[1].ppq - 0.25) < 0.01); CHECK(std::fabs(n[2].ppq - 1.0) < 0.01);
+        CHECK(std::fabs(n[3].ppq - 1.5) < 0.01); CHECK(n[1].note == 50); CHECK(n[2].note == 52);
+    }
+    // note length follows the stage duration (gate 50 % of 3 sixteenths)
+    auto all = run(e, 1.0, 0.0, 512, false);
+    double on1 = -1, off1 = -1;
+    for (auto& x : all) { if (x.note == 50 && x.on && on1 < 0) on1 = x.ppq; if (x.note == 50 && !x.on && on1 >= 0 && off1 < 0) off1 = x.ppq; }
+    CHECK(on1 >= 0 && std::fabs((off1 - on1) - 0.375) < 0.02);
+    // serialization keeps durations
+    auto p2 = std::make_unique<Project>();
+    CHECK(deserialize(serialize(*p), *p2));
+    CHECK(p2->seqs[0].pat().tracks[0].steps[1].dur == 3);
+}
+
 int runControllerTests(); // defined in test_controller.cpp
 
 int main() {
@@ -404,6 +430,7 @@ int main() {
     testStochastic();
     testMatriceal();
     testDomino();
+    testSaga();
     failures += runControllerTests();
     if (failures == 0) std::printf("ALL TESTS PASSED\n");
     else std::printf("%d FAILURE(S)\n", failures);

@@ -180,7 +180,7 @@ static bool stepIsDefault(const Step& s) {
     return !s.active && !s.muted && s.numNotes == 0 && s.velocity == d.velocity && s.octave == 0 && s.gate == d.gate
         && s.tie == 0 && s.trig == d.trig && s.repeats == 1 && s.repDur == 1 && s.ramp == 0 && s.accel == 0
         && s.retrig == 1 && s.offset == 0 && s.rng == 0 && s.repProb == 100 && s.velLocked == 0
-        && s.chordType == 0 && s.voicing == 0 && s.spread == 0 && s.strum == 0;
+        && s.chordType == 0 && s.voicing == 0 && s.spread == 0 && s.strum == 0 && s.dur == 1;
 }
 
 std::string serialize(const Project& p) {
@@ -249,6 +249,7 @@ std::string serialize(const Project& p) {
                     if (st.chordType || st.voicing || st.spread || st.strum)
                         o << "SC " << s << ' ' << pi << ' ' << t << ' ' << i << ' ' << (int) st.chordType << ' ' << (int) st.voicing
                           << ' ' << (int) st.spread << ' ' << (int) st.strum << '\n';
+                    if (st.dur != 1) o << "SD " << s << ' ' << pi << ' ' << t << ' ' << i << ' ' << (int) st.dur << '\n';
                 }
             }
         }
@@ -305,6 +306,10 @@ bool deserialize(const std::string& str, Project& p) {
             p.seqs[(size_t) s].bassMode = clampv<uint8_t>(at(1), 0, 17);
             p.seqs[(size_t) s].chMx = clampv<uint8_t>(at(2), 0, 1);
             if (v.size() >= 4) p.seqs[(size_t) s].voice = clampv<uint8_t>(at(3), 0, 1);
+        } else if (tag == "SD" && v.size() >= 5) {
+            int s = at(0), pi = at(1), t = at(2), i = at(3);
+            if (s < 0 || s >= kNumSeqs || pi < 0 || pi >= kNumPatterns || t < 0 || t >= kNumTracks || i < 0 || i >= kMaxSteps) continue;
+            p.seqs[(size_t) s].patterns[(size_t) pi].tracks[(size_t) t].steps[(size_t) i].dur = clampv<uint8_t>(at(4), 1, 32);
         } else if (tag == "SC" && v.size() >= 8) {
             int s = at(0), pi = at(1), t = at(2), i = at(3);
             if (s < 0 || s >= kNumSeqs || pi < 0 || pi >= kNumPatterns || t < 0 || t >= kNumTracks || i < 0 || i >= kMaxSteps) continue;

@@ -69,6 +69,16 @@ int main() {
                 auto& tr = proc.project().seqs[0].pat().tracks[0];
                 tr.steps[6].active = true; tr.steps[6].numNotes = 1; tr.steps[6].notes[0] = 3; tr.steps[6].tie = 2;
                 tr.steps[10].active = true; tr.steps[10].numNotes = 1; tr.steps[10].notes[0] = 5;
+                if (juce::SystemStats::getEnvironmentVariable("TEK_SNAP_SAGA", "").isNotEmpty()) {
+                    auto& q = proc.project().seqs[0];
+                    q.mode = tek::Mode::Saga; q.scale = 1;
+                    auto& t0 = q.pat().tracks[0];
+                    for (auto& st : t0.steps) st = tek::Step();
+                    t0.end = 23;
+                    int durs[] = {1, 3, 2, 1, 4, 1, 2, 6};
+                    for (int i = 0; i < 8; ++i) { auto& st = t0.steps[(size_t) (i * 2)]; st.active = true; st.numNotes = 1; st.notes[0] = (int8_t) i; st.dur = (uint8_t) durs[i]; }
+                    proc.controller().padDown(4, 0, 0);
+                }
                 if (juce::SystemStats::getEnvironmentVariable("TEK_SNAP_DOMI", "").isNotEmpty()) {
                     auto& q = proc.project().seqs[0];
                     q.mode = tek::Mode::Domino; q.scale = 1;

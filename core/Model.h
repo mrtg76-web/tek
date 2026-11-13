@@ -17,9 +17,9 @@ constexpr int kNumTracks = 8;
 constexpr int kMaxPolyNotes = 7;
 constexpr int kNumGrooves = 14;
 
-enum class Mode : uint8_t { Mono = 0, Poly, Multi, Chord, Stoch, Matr, Domino, Count };
+enum class Mode : uint8_t { Mono = 0, Poly, Multi, Chord, Stoch, Matr, Domino, Saga, Count };
 inline const char* modeLabel(Mode m) {
-    switch (m) { case Mode::Mono: return "MONO"; case Mode::Poly: return "POLY"; case Mode::Multi: return "MULT"; case Mode::Chord: return "CHRD"; case Mode::Stoch: return "STCH"; case Mode::Matr: return "MATR"; case Mode::Domino: return "DOMI"; default: return "?"; }
+    switch (m) { case Mode::Mono: return "MONO"; case Mode::Poly: return "POLY"; case Mode::Multi: return "MULT"; case Mode::Chord: return "CHRD"; case Mode::Stoch: return "STCH"; case Mode::Matr: return "MATR"; case Mode::Domino: return "DOMI"; case Mode::Saga: return "SAGA"; default: return "?"; }
 }
 
 enum class Dir : uint8_t { Forward = 0, Reverse, Pendulum, Pong, Random, Drunk, Count };
@@ -85,6 +85,7 @@ struct Step {
     uint8_t voicing = 0;     // 0..5 (No Inv, I Inv, II Inv, Open, I Open, II Open)
     uint8_t spread = 0;      // 0..6 extra upper-octave tones
     int8_t strum = 0;        // -100..100 %
+    uint8_t dur = 1;         // saga: stage duration in steps (1..32)
 
     bool hasNote(int degree) const {
         for (int i = 0; i < numNotes; ++i) if (notes[(size_t) i] == degree) return true;

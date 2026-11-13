@@ -100,6 +100,7 @@ private:
     void playStoch(int s, int pos, double grid, double L, double bpm, bool parity, int64_t counter);
     void playMatriceal(int s, int t, double grid, double L, double bpm);
     void playDomino(int s, double grid, double L, double bpm);
+    void playSaga(int s, double grid, double L, double bpm);
     double trackStepLength(int s, int t) const;
 
     Project& proj;

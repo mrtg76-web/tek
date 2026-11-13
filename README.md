@@ -1,8 +1,25 @@
-# TEK — 8 kanallı performans sequencer'ı (Faz 1 + Faz 2: Chord, Stochastic, Matriceal, Domino)
+# TEK — 8 kanallı performans sequencer'ı (Faz 1 + Faz 2: Chord, Stochastic, Matriceal, Domino, Saga)
 
 TEK, OXI ONE MKII kılavuzunu temel alan bir VST3/AU sequencer plugin'i. Ses üretmiyor, MIDI üretiyor. Ableton'daki synth'leri, drum rack'leri ve harici cihazları sürüyor.
 
-## Faz 2: Domino modu (yeni)
+## Faz 2: Saga modu (yeni)
+
+Setup'ta knob 4 ile **SAGA** seç. Saga'da adımlar sabit bir grid'e bağlı değil: her pad bir **stage** ve her stage'in kendi süresi (Durat) var.
+
+- **Üst 6 sıra (96 stage):** Soldan sağa, yukarıdan aşağıya sayılır.
+  - Dizinin dışında kalan bir pad'e dokunmak dizinin uzunluğunu oraya kadar uzatır. Dizi koyu kırmızı görünür.
+  - Dizideki bir stage'e dokunmak onu açar (son seçilen nota ile) veya kapatır.
+  - INIT/END + pad de başlangıç ve bitişi ayarlar.
+- **Alt 2 sıra klavye:** Domino ile aynı. Stage'i basılı tutup (veya sağ tıklayıp) tuşlara basarak nota veya akor girersin.
+- **Stage basılıyken knob'lar:** PAGE ile 3 sayfa arasında geçilir.
+  - Sayfa 1: Vel / Note / Gate / **Durat**. Durat, stage'in kaç adım süreceği (1–32); yüksek Durat'lı stage'ler daha parlak görünür.
+  - Sayfa 2: Offst / Rng / Trig / Rept.
+  - Sayfa 3: repeat süresi / Rpt% / Oct.
+- **Zamanlama:** Playhead her stage'de Durat kadar bekler, sonra sonraki stage'e geçer. Toplam süre ekranda T.Durat olarak görünür. Nota uzunluğu "Gate × Durat" ile hesaplanır.
+- **Tie:** Stage'i basılı tut, sonraki bir stage'e dokun. Nota bağlanan stage'lerin süreleri boyunca uzar.
+- **Mono/Poly ve ChMx:** Setup sayfa 3'te.
+
+## Faz 2: Domino modu
 
 Setup'ta knob 4 ile **DOMI** seç. Grid üç bölüme ayrılır:
 

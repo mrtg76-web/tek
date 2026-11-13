@@ -56,6 +56,9 @@ private:
     bool isStoch() const { return seq().mode == Mode::Stoch; }
     bool isMatr() const { return seq().mode == Mode::Matr; }
     bool isDomino() const { return seq().mode == Mode::Domino; }
+    bool isSaga() const { return seq().mode == Mode::Saga; }
+    bool hasKeys() const { return isDomino() || isSaga(); }
+    int noteRows() const { return isSaga() ? 6 : 2; }
     MatTrack& matTrack(int k) { return seq().pat().mat.tracks[(size_t) k]; }
     const MatTrack& matTrack(int k) const { return seq().pat().mat.tracks[(size_t) k]; }
     int matLaneOf(int k) const { return matLane[(size_t) sel][(size_t) k]; }
@@ -88,6 +91,8 @@ private:
     void domKnob(int knob, int delta, double nowMs);
     void renderDomino(Frame& f) const;
     void renderDominoDisplay(Frame& f) const;
+    void renderSaga(Frame& f) const;
+    void renderSagaDisplay(Frame& f) const;
     Track& noteTrack() { return seq().pat().tracks[isDomino() ? 0 : (size_t) trackIndex()]; }
     const Track& noteTrack() const { return seq().pat().tracks[isDomino() ? 0 : (size_t) trackIndex()]; }
     void matTap(int x, int y, double nowMs);

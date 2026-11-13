@@ -469,6 +469,61 @@ void Engine::playDomino(int s, double grid, double L, double bpm) {
     }
 }
 
+// ---------------------------------------------------------------- saga mode (manual 6.11)
+// Each stage plays for its own duration (in steps). The position is derived from the step counter so it
+// stays locked to the timeline.
+void Engine::playSaga(int s, double grid, double L, double bpm) {
+    auto& q = proj.seqs[(size_t) s];
+    auto& pat = q.pat();
+    auto& tr = pat.tracks[0];
+    auto& r = rt[(size_t) s][0];
+    // stage order for one cycle
+    int order[kMaxSteps * 2];
+    int n = 0;
+    const int a = tr.start, b = tr.end;
+    switch (tr.dir) {
+        case Dir::Reverse: for (int i = b; i >= a; --i) order[n++] = i; break;
+        case Dir::Pendulum: for (int i = a; i <= b; ++i) order[n++] = i; for (int i = b; i >= a; --i) order[n++] = i; break;
+        case Dir::Pong: for (int i = a; i <= b; ++i) order[n++] = i; for (int i = b - 1; i > a; --i) order[n++] = i; break;
+        default: for (int i = a; i <= b; ++i) order[n++] = i; break;
+    }
+    int64_t total = 0;
+    for (int k = 0; k < n; ++k) total += std::max<int>(1, tr.steps[(size_t) order[k]].dur);
+    const int64_t c = r.counter;
+    r.counter++; r.sinceStart++;
+    if (total <= 0) return;
+    int64_t t = c % total;
+    int k = 0;
+    while (k < n) { int d = std::max<int>(1, tr.steps[(size_t) order[k]].dur); if (t < d) break; t -= d; ++k; }
+    if (k >= n || t != 0) return; // inside a stage: the playhead waits
+    const int pos = order[k];
+    push({grid, 2, 0, 0, 0, (uint8_t) s, 0, (int16_t) pos});
+    const Step& st = tr.steps[(size_t) pos];
+    if (!st.active || st.numNotes == 0 || !q.active || q.muted || st.muted) return;
+    if (!evalTrig(st, r, n)) return;
+
+    const bool parity = (c % 2) != 0;
+    double time = grid + (parity ? (pat.swing - 50) / 50.0 * L : 0.0) + st.offset / 100.0 * L + q.nudgeMs / 1000.0 * bpm / 60.0;
+    double span = std::max<int>(1, st.dur) * L;
+    if (st.tie > 0) for (int i = 1; i <= st.tie && pos + i < kMaxSteps; ++i) span += std::max<int>(1, tr.steps[(size_t) (pos + i)].dur) * L;
+    double dur = st.tie > 0 ? span * 0.99 : (st.gate >= kGateLegato ? span * 1.02 : std::max(0.002, st.gate / 100.0 * span));
+    const int voices = q.voice == 0 ? 1 : std::min<int>(st.numNotes, kMaxPolyNotes);
+    const int reps = std::max<int>(1, st.repeats);
+    const double rd = std::max<int>(1, st.repDur) * L / reps;
+    for (int i = 0; i < reps; ++i) {
+        if (i > 0 && st.repProb < 100 && (int) (rand32() % 100) >= st.repProb) continue;
+        int shift = (st.rng > 0) ? (int) (rand32() % (uint32_t) (2 * st.rng + 1)) - st.rng : 0;
+        double on = time + i * rd;
+        double len = reps > 1 ? std::min(dur, rd * 0.9) : dur;
+        for (int v = 0; v < voices; ++v) {
+            int note = std::clamp(q.baseMidi() + degreeToSemis(q.scale, st.notes[(size_t) v] + shift) + st.octave * 12 + transposeOffset[(size_t) s], 0, 127);
+            uint8_t ch = q.chMx ? (uint8_t) ((q.channel + v) % 16) : q.channel;
+            push({on, 0, ch, (uint8_t) note, (uint8_t) std::clamp((int) st.velocity, 1, 127), (uint8_t) s, 0, 0});
+            push({on + len, 1, ch, (uint8_t) note, 0, (uint8_t) s, 0, 0});
+        }
+    }
+}
+
 void Engine::process(const Transport& host, int numSamples, const std::vector<MidiIn>& in, std::vector<MidiOut>& out) {
     // ---- MIDI input: transposition (manual 3.15 "Trnsp")
     for (auto& m : in) {
@@ -552,6 +607,7 @@ void Engine::process(const Transport& host, int numSamples, const std::vector<Mi
                 if (r.nextGrid - L > blockEnd) break;
                 if (q.mode == Mode::Matr) playMatriceal(s, t, r.nextGrid, L, tp.bpm);
                 else if (q.mode == Mode::Domino) playDomino(s, r.nextGrid, L, tp.bpm);
+                else if (q.mode == Mode::Saga) playSaga(s, r.nextGrid, L, tp.bpm);
                 else scheduleStep(s, t, r.nextGrid, L, tp.bpm);
                 double nextL = L;
                 if (q.mode != Mode::Matr && tr.rndDiv > 0 && (int) (rand32() % 100) < tr.rndDiv) nextL = L * ((rand32() & 1) ? 2.0 : 0.5);
