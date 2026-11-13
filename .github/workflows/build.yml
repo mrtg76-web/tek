@@ -1,0 +1,62 @@
+name: build
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Core tests
+        run: |
+          cmake -B build -DTEK_BUILD_PLUGIN=OFF -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j4
+          ctest --test-dir build --output-on-failure
+
+  macos:
+    needs: tests
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure (universal: Apple Silicon + Intel/Rosetta)
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DCMAKE_OSX_DEPLOYMENT_TARGET=10.15 -DTEK_BUILD_TESTS=OFF
+      - name: Build
+        run: cmake --build build --config Release --target TEK_VST3 TEK_AU TEK_Standalone -j4
+      - name: Sign (ad-hoc) and package
+        run: |
+          A=build/TEK_artefacts/Release
+          codesign --force --deep -s - "$A/VST3/TEK.vst3"
+          codesign --force --deep -s - "$A/AU/TEK.component"
+          codesign --force --deep -s - "$A/Standalone/TEK.app"
+          mkdir -p dist
+          ditto "$A/VST3/TEK.vst3" dist/TEK.vst3
+          ditto "$A/AU/TEK.component" dist/TEK.component
+          ditto "$A/Standalone/TEK.app" dist/TEK.app
+          cp README.md dist/KURULUM.md
+          lipo -info "$A/VST3/TEK.vst3/Contents/MacOS/TEK"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TEK-mac
+          path: dist
+
+  windows:
+    needs: tests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -B build -DTEK_BUILD_TESTS=OFF
+      - name: Build
+        run: cmake --build build --config Release --target TEK_VST3 TEK_Standalone
+      - name: Package
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp -r build/TEK_artefacts/Release/VST3/TEK.vst3 dist/
+          cp build/TEK_artefacts/Release/Standalone/TEK.exe dist/ || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TEK-windows
+          path: dist

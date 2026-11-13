@@ -1,0 +1,357 @@
+#include "Engine.h"
+#include <algorithm>
+#include <cmath>
+
+namespace tek {
+
+Engine::Engine(Project& p) : proj(p) {
+    queue.reserve(16384);
+    due.reserve(4096);
+    pendingPat.fill(-1);
+    resetPending.fill(false);
+    transposeOffset.fill(0);
+}
+
+void Engine::prepare(double sampleRate) { sr = sampleRate > 0 ? sampleRate : 44100.0; }
+
+void Engine::setInternalPlaying(bool playing) {
+    if (playing && !intPlaying) intPpq = 0.0;
+    intPlaying = playing;
+}
+
+void Engine::requestPattern(int seq, int pattern) {
+    if (seq < 0 || seq >= kNumSeqs || pattern < 0 || pattern >= kNumPatterns) return;
+    if (!wasPlaying) { proj.seqs[(size_t) seq].curPattern = (uint8_t) pattern; pendingPat[(size_t) seq] = -1; }
+    else pendingPat[(size_t) seq] = pattern;
+}
+
+void Engine::panic() { panicPending = true; }
+void Engine::resetSeq(int seq) { if (seq >= 0 && seq < kNumSeqs) resetPending[(size_t) seq] = true; }
+
+int Engine::positionFor(Dir dir, int start, int end, int64_t c) {
+    const int len = end - start + 1;
+    if (len <= 1) return start;
+    switch (dir) {
+        case Dir::Reverse: return end - (int) (c % len);
+        case Dir::Pendulum: { // ends play twice
+            int64_t p = c % (2 * len);
+            return p < len ? start + (int) p : end - (int) (p - len);
+        }
+        case Dir::Pong: {     // ends play once
+            int64_t period = 2 * len - 2;
+            int64_t p = c % period;
+            return p < len ? start + (int) p : end - (int) (p - len + 1);
+        }
+        default: return start + (int) (c % len);
+    }
+}
+
+double Engine::stepLength(const Sequencer& q, const Track& tr) const {
+    double L = divisionBeats(tr.div);
+    double bend = 1.0 + q.timeBend / 1000.0;
+    return L / bend;
+}
+
+void Engine::initTrack(int s, int t, double ppq) {
+    auto& q = proj.seqs[(size_t) s];
+    auto& tr = q.pat().tracks[(size_t) t];
+    auto& r = rt[(size_t) s][(size_t) t];
+    double L = stepLength(q, tr);
+    int64_t idx = (int64_t) std::ceil(ppq / L - 1e-7);
+    r.nextIdx = idx;
+    r.nextGrid = idx * L;
+    r.sinceStart = 0;
+    r.lastTrig = true;
+    r.pos = -1;
+    if (q.resetBars > 0) {
+        double period = q.resetBars * 4.0;
+        r.resetBlock = (int64_t) std::floor(r.nextGrid / period + 1e-9);
+        r.counter = (int64_t) std::llround((r.nextGrid - r.resetBlock * period) / L);
+    } else {
+        r.resetBlock = -1;
+        r.counter = idx; // timeline aligned: the pattern sits where it would be if played from the start
+    }
+    r.init = true;
+}
+
+void Engine::startAll(double ppq) {
+    for (int s = 0; s < kNumSeqs; ++s)
+        for (int t = 0; t < kNumTracks; ++t) initTrack(s, t, ppq);
+    running = true;
+}
+
+void Engine::emitNoteOn(std::vector<MidiOut>& out, int off, int ch, int note, int vel) {
+    auto& c = noteCount[(size_t) ch][(size_t) note];
+    if (c > 0) out.push_back({off, (uint8_t) (0x80 | ch), (uint8_t) note, 0}); // re-attack
+    if (c < 255) ++c;
+    out.push_back({off, (uint8_t) (0x90 | ch), (uint8_t) note, (uint8_t) std::clamp(vel, 1, 127)});
+}
+
+void Engine::emitNoteOff(std::vector<MidiOut>& out, int off, int ch, int note) {
+    auto& c = noteCount[(size_t) ch][(size_t) note];
+    if (c == 0) return;
+    --c;
+    if (c == 0) out.push_back({off, (uint8_t) (0x80 | ch), (uint8_t) note, 0});
+}
+
+void Engine::stopAll(std::vector<MidiOut>& out, int offset) {
+    for (int ch = 0; ch < 16; ++ch)
+        for (int n = 0; n < 128; ++n)
+            if (noteCount[(size_t) ch][(size_t) n] > 0) {
+                out.push_back({offset, (uint8_t) (0x80 | ch), (uint8_t) n, 0});
+                noteCount[(size_t) ch][(size_t) n] = 0;
+            }
+    queue.clear();
+    for (auto& sq : rt) for (auto& r : sq) { r.init = false; r.playheadUi = -1; }
+    running = false;
+}
+
+bool Engine::evalTrig(const Step& st, TrackRt& r, int len) {
+    const auto& t = st.trig;
+    int64_t cycle = len > 0 ? r.counter / len : 0;
+    int64_t cycleSinceStart = len > 0 ? r.sinceStart / len : 0;
+    bool res = true;
+    switch (t.type) {
+        case TrigType::Prob: res = t.a >= 100 ? true : (t.a == 0 ? false : (rand32() % 100) < t.a); break;
+        case TrigType::AB: res = t.b > 0 && (cycle % t.b) + 1 == t.a; break;
+        case TrigType::NotAB: res = !(t.b > 0 && (cycle % t.b) + 1 == t.a); break;
+        case TrigType::Pre: res = r.lastTrig; break;
+        case TrigType::NotPre: res = !r.lastTrig; break;
+        case TrigType::First: res = cycleSinceStart == 0; break;
+        case TrigType::NotFirst: res = cycleSinceStart != 0; break;
+        case TrigType::Fixed: case TrigType::Locked: res = true; break;
+        case TrigType::Flow: res = flowHeld.load(); break;
+        case TrigType::NotFlow: res = !flowHeld.load(); break;
+    }
+    // PRE / !PRE look at the most recent condition result; plain 100% steps don't overwrite it
+    bool isCondition = !(t.type == TrigType::Prob && t.a >= 100) && t.type != TrigType::Fixed && t.type != TrigType::Locked;
+    if (isCondition) r.lastTrig = res;
+    return res;
+}
+
+void Engine::scheduleStep(int s, int t, double grid, double L, double bpm) {
+    auto& q = proj.seqs[(size_t) s];
+    auto& pat = q.pat();
+    auto& tr = pat.tracks[(size_t) t];
+    auto& r = rt[(size_t) s][(size_t) t];
+
+    // reset period handling
+    if (q.resetBars > 0) {
+        double period = q.resetBars * 4.0;
+        int64_t blk = (int64_t) std::floor(grid / period + 1e-9);
+        if (blk != r.resetBlock) { r.resetBlock = blk; r.counter = 0; r.pos = -1; }
+    }
+
+    const int len = tr.length();
+    int pos;
+    if (tr.dir == Dir::Random) pos = tr.start + (int) (rand32() % (uint32_t) std::max(1, len));
+    else if (tr.dir == Dir::Drunk) {
+        if (r.pos < tr.start || r.pos > tr.end) pos = tr.start;
+        else {
+            uint32_t x = rand32() % 4;
+            pos = r.pos + (x < 2 ? 1 : (x == 2 ? 0 : -1));
+            if (pos > tr.end) pos = tr.start;
+            if (pos < tr.start) pos = tr.end;
+        }
+    } else pos = positionFor(tr.dir, tr.start, tr.end, r.counter);
+    r.pos = pos;
+
+    push({grid, 2, 0, 0, 0, (uint8_t) s, (uint8_t) t, (int16_t) pos});
+
+    const Step& st = tr.steps[(size_t) pos];
+    const bool parity = (r.nextIdx % 2) != 0; // nextIdx already refers to this step here
+    const int64_t counter = r.counter;
+    r.counter++;
+    r.sinceStart++;
+    if (!st.active || st.numNotes == 0) return;
+
+    bool fire = evalTrig(st, r, len);
+    if (!q.active || q.muted || st.muted) fire = false;
+    if (q.mode == Mode::Multi) {
+        uint8_t solo = soloMask[(size_t) s];
+        if (tr.muted) fire = false;
+        if (solo != 0 && !(solo & (1u << t))) fire = false;
+    }
+    if (!fire) return;
+
+    // ---- timing
+    double time = grid;
+    int swing = (q.mode == Mode::Multi && tr.swing != 0) ? tr.swing : pat.swing;
+    if (parity) time += (swing - 50) / 50.0 * L;
+    time += st.offset / 100.0 * L;
+    double vel = st.velocity;
+    if (q.groove > 0) {
+        const auto& g = grooveTemplate(q.groove);
+        int gl = std::max(1, (int) q.grooveLen);
+        int gi = (int) (((counter + q.grooveOffset) % gl + gl) % gl) % 16;
+        float rnd = 1.0f - rand01() * q.grooveRand / 100.0f;
+        time += g.timing[(size_t) gi] * q.grooveTime / 100.0 * L * rnd;
+        vel *= 1.0 + g.velocity[(size_t) gi] * q.grooveAccent / 100.0 * rnd;
+    }
+    time += q.nudgeMs / 1000.0 * bpm / 60.0;
+
+    // ---- duration
+    double dur;
+    if (st.tie > 0) dur = (st.tie + 1) * L - 0.001;
+    else if (st.gate >= kGateLegato) dur = L * 1.03;
+    else dur = std::max(0.002, st.gate / 100.0 * L);
+
+    // ---- notes
+    const int nNotes = q.mode == Mode::Poly ? std::min<int>(st.numNotes, q.nVoices) : 1;
+    auto pitchOf = [&](int degree) {
+        int base = q.mode == Mode::Multi ? (int) tr.baseNote : q.baseMidi();
+        int n = base + degreeToSemis(q.scale, degree) + st.octave * 12 + transposeOffset[(size_t) s];
+        return std::clamp(n, 0, 127);
+    };
+    const uint8_t ch = q.mode == Mode::Multi ? tr.channel : q.channel;
+
+    auto addNote = [&](double on, double length, int degree, double v) {
+        int note = pitchOf(degree);
+        int vv = std::clamp((int) std::lround(v), 1, 127);
+        push({on, 0, ch, (uint8_t) note, (uint8_t) vv, (uint8_t) s, (uint8_t) t, 0});
+        push({on + length, 1, ch, (uint8_t) note, 0, (uint8_t) s, (uint8_t) t, 0});
+    };
+
+    if (st.repeats > 1) {
+        const int n = st.repeats;
+        const double total = st.repDur * L;
+        const double f = 1.0 - st.accel / 100.0;
+        double d0 = std::fabs(f - 1.0) < 1e-6 ? total / n : total * (1.0 - f) / (1.0 - std::pow(f, n));
+        double tpos = time, d = d0;
+        for (int i = 0; i < n; ++i) {
+            if (i > 0 && st.repProb < 100 && (int) (rand32() % 100) >= st.repProb) { tpos += d; d *= f; continue; }
+            double v = vel * (1.0 + st.ramp / 100.0 * (n > 1 ? (double) i / (n - 1) : 0.0));
+            double length = std::max(0.002, std::min(dur, d * 0.9));
+            for (int k = 0; k < nNotes; ++k) {
+                int deg = st.notes[(size_t) k];
+                if (i > 0 && st.rng > 0) deg += (int) (rand32() % (uint32_t) (2 * st.rng + 1)) - st.rng;
+                addNote(tpos, length, deg, v);
+            }
+            tpos += d; d *= f;
+        }
+    } else if (st.retrig > 1) {
+        const int n = st.retrig;
+        double span = st.tie > 0 ? dur : std::max(dur, L * 0.5);
+        double d = span / n;
+        for (int i = 0; i < n; ++i)
+            for (int k = 0; k < nNotes; ++k) addNote(time + i * d, std::max(0.002, d * 0.5), st.notes[(size_t) k], vel);
+    } else {
+        for (int k = 0; k < nNotes; ++k) addNote(time, dur, st.notes[(size_t) k], vel);
+    }
+}
+
+void Engine::process(const Transport& host, int numSamples, const std::vector<MidiIn>& in, std::vector<MidiOut>& out) {
+    // ---- MIDI input: transposition (manual 3.15 "Trnsp")
+    for (auto& m : in) {
+        if ((m.status & 0xF0) != 0x90 || m.data2 == 0) continue;
+        int ch = m.status & 0x0F;
+        for (int s = 0; s < kNumSeqs; ++s) {
+            auto& q = proj.seqs[(size_t) s];
+            if (q.transpose == 0) continue;
+            int want = q.transpose == 1 ? q.channel : q.transpose - 2;
+            if (want != ch) continue;
+            transposeOffset[(size_t) s] = (int) m.data1 - q.baseMidi();
+        }
+    }
+
+    if (panicPending) {
+        panicPending = false;
+        stopAll(out, 0);
+        for (int ch = 0; ch < 16; ++ch) out.push_back({0, (uint8_t) (0xB0 | ch), 123, 0});
+        wasPlaying = false;
+        expectedPpq = -1.0;
+    }
+
+    Transport tp = host;
+    if (proj.internalClock) {
+        tp.playing = intPlaying;
+        tp.bpm = proj.bpm;
+        tp.ppq = intPpq;
+    }
+    if (tp.bpm <= 0) tp.bpm = 120.0;
+    bpmUi = tp.bpm;
+    ppqUi = tp.ppq;
+
+    const double ppqPerSample = tp.bpm / 60.0 / sr;
+    const double blockEnd = tp.ppq + numSamples * ppqPerSample;
+
+    if (!tp.playing) {
+        if (wasPlaying) stopAll(out, 0);
+        wasPlaying = false;
+        expectedPpq = -1.0;
+        for (int s = 0; s < kNumSeqs; ++s)
+            if (pendingPat[(size_t) s] >= 0) { proj.seqs[(size_t) s].curPattern = (uint8_t) pendingPat[(size_t) s]; pendingPat[(size_t) s] = -1; }
+        return;
+    }
+
+    // start or timeline jump (loop / locate)
+    bool jumped = expectedPpq >= 0.0 && std::fabs(tp.ppq - expectedPpq) > std::max(0.01, numSamples * ppqPerSample * 0.5);
+    if (!wasPlaying || jumped) {
+        if (jumped) stopAll(out, 0);
+        startAll(tp.ppq);
+    }
+    wasPlaying = true;
+    expectedPpq = blockEnd;
+    if (proj.internalClock) intPpq = blockEnd;
+
+    // pattern switches at bar boundaries
+    {
+        double nextBar = std::floor(tp.ppq / 4.0 + 1e-9) * 4.0 + 4.0;
+        bool crosses = std::floor(tp.ppq / 4.0 + 1e-9) != std::floor(blockEnd / 4.0 + 1e-9) || std::fabs(std::fmod(tp.ppq, 4.0)) < 1e-9;
+        (void) nextBar;
+        if (crosses)
+            for (int s = 0; s < kNumSeqs; ++s)
+                if (pendingPat[(size_t) s] >= 0) { proj.seqs[(size_t) s].curPattern = (uint8_t) pendingPat[(size_t) s]; pendingPat[(size_t) s] = -1; }
+    }
+
+    // ---- schedule steps one step ahead (allows negative offsets / swing)
+    for (int s = 0; s < kNumSeqs; ++s) {
+        auto& q = proj.seqs[(size_t) s];
+        if (resetPending[(size_t) s]) {
+            resetPending[(size_t) s] = false;
+            for (int t = 0; t < kNumTracks; ++t) { initTrack(s, t, tp.ppq); rt[(size_t) s][(size_t) t].counter = 0; }
+        }
+        if (!q.active) continue;
+        const int nt = tracksFor(q);
+        for (int t = 0; t < nt; ++t) {
+            auto& r = rt[(size_t) s][(size_t) t];
+            if (!r.init) initTrack(s, t, tp.ppq);
+            int guard = 0;
+            while (guard++ < 512) {
+                auto& tr = q.pat().tracks[(size_t) t];
+                double L = stepLength(q, tr);
+                if (r.nextGrid - L > blockEnd) break;
+                scheduleStep(s, t, r.nextGrid, L, tp.bpm);
+                double nextL = L;
+                if (tr.rndDiv > 0 && (int) (rand32() % 100) < tr.rndDiv) nextL = L * ((rand32() & 1) ? 2.0 : 0.5);
+                r.nextGrid += nextL;
+                r.nextIdx++;
+            }
+        }
+    }
+
+    // ---- emit due events
+    due.clear();
+    size_t w = 0;
+    for (size_t i = 0; i < queue.size(); ++i) {
+        if (queue[i].ppq < blockEnd) due.push_back(queue[i]);
+        else queue[w++] = queue[i];
+    }
+    queue.resize(w);
+    std::stable_sort(due.begin(), due.end(), [](const Ev& a, const Ev& b) {
+        if (a.ppq != b.ppq) return a.ppq < b.ppq;
+        return a.kind > b.kind; // note offs before note ons at the same time
+    });
+    for (auto& e : due) {
+        int off = (int) std::floor((e.ppq - tp.ppq) / ppqPerSample);
+        off = std::clamp(off, 0, std::max(0, numSamples - 1));
+        switch (e.kind) {
+            case 0: emitNoteOn(out, off, e.ch, e.d1, e.d2); break;
+            case 1: emitNoteOff(out, off, e.ch, e.d1); break;
+            case 2: rt[e.seq][e.track].playheadUi.store(e.pos, std::memory_order_relaxed); break;
+            default: out.push_back({off, e.ch, e.d1, e.d2}); break;
+        }
+    }
+}
+
+} // namespace tek
