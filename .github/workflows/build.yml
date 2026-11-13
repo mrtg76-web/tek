@@ -17,7 +17,13 @@ jobs:
 
   macos:
     needs: tests
-    runs-on: macos-15-intel
+    # GitHub's macOS runners are often short on capacity: try two runner types, either one is enough
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15-intel, macos-latest]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
       - name: "Configure (universal - Apple Silicon + Intel/Rosetta)"
@@ -38,7 +44,7 @@ jobs:
           lipo -info "$A/VST3/TEK.vst3/Contents/MacOS/TEK"
       - uses: actions/upload-artifact@v5
         with:
-          name: TEK-mac
+          name: TEK-mac-${{ matrix.runner }}
           path: dist
 
   windows:
