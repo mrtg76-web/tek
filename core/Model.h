@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <string>
 #include <memory>
+#include <vector>
 #include "Scales.h"
 
 namespace tek {
@@ -88,7 +89,7 @@ struct Step {
 };
 
 struct Track {
-    std::array<Step, kMaxSteps> steps {};
+    std::array<Step, kMaxSteps> steps;
     uint8_t start = 0, end = 15;   // inclusive step range
     Dir dir = Dir::Forward;
     Division div = Division::Sixteenth;
@@ -104,7 +105,7 @@ struct Track {
 };
 
 struct Pattern {
-    std::array<Track, kNumTracks> tracks {};
+    std::array<Track, kNumTracks> tracks;
     uint8_t swing = 50;            // 10..90, 50 = none (saved with pattern, manual 4.8)
     bool isEmpty() const;
 };
@@ -134,7 +135,7 @@ struct Sequencer {
     int8_t grooveOffset = 0;       // -15..15 steps
     uint8_t grooveLen = 16;        // 1..16
     uint8_t grooveRand = 0;        // 0..100 %
-    std::array<Pattern, kNumPatterns> patterns {};
+    std::vector<Pattern> patterns = std::vector<Pattern>(kNumPatterns); // heap: keeps compilers happy
 
     Pattern& pat() { return patterns[curPattern]; }
     const Pattern& pat() const { return patterns[curPattern]; }
@@ -147,7 +148,7 @@ inline const char* outputModeLabel(OutputMode m) {
 }
 
 struct Project {
-    std::array<Sequencer, kNumSeqs> seqs {};
+    std::array<Sequencer, kNumSeqs> seqs;
     double bpm = 120.0;            // internal clock tempo
     bool internalClock = false;    // false = follow host transport
     OutputMode output = OutputMode::Both;
