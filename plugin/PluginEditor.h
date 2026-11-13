@@ -26,6 +26,7 @@ private:
     struct Hit { HitKind kind = HitKind::None; int a = 0, b = 0; };
 
     void timerCallback() override;
+    void openMidiFile(int seq);
     Hit hitAt(juce::Point<float> designPos) const;
     juce::Point<float> toDesign(juce::Point<float> p) const;
     juce::Rectangle<float> buttonRect(tek::Btn b) const;
@@ -42,6 +43,7 @@ private:
     }
 
     TekProcessor& proc;
+    std::unique_ptr<juce::FileChooser> chooser;
     tek::Frame frame;
     float scale = 1.0f;
 

@@ -58,6 +58,7 @@ double Engine::trackStepLength(int s, int t) const {
     if (q.mode == Mode::Matr)
         return divisionBeats(q.pat().mat.tracks[(size_t) t].lanes[kLaneTrig].div) / (1.0 + q.timeBend / 1000.0);
     if (q.mode == Mode::Domino) return stepLength(q, q.pat().tracks[1]);
+    if (q.mode == Mode::Player) return 0.25 / (1.0 + q.timeBend / 1000.0); // tick based: fixed 1/16 windows
     return stepLength(q, q.pat().tracks[(size_t) t]);
 }
 
@@ -524,6 +525,32 @@ void Engine::playSaga(int s, double grid, double L, double bpm) {
     }
 }
 
+// ---------------------------------------------------------------- MIDI player mode (manual 6.12)
+void Engine::playClip(int s, double grid, double L, double bpm) {
+    auto& q = proj.seqs[(size_t) s];
+    const auto& clip = q.pat().clip;
+    auto& r = rt[(size_t) s][0];
+    const int64_t c = r.counter;
+    r.counter++; r.sinceStart++;
+    if (clip.notes.empty() || clip.lengthTicks == 0) return;
+    const uint32_t win = kClipPpqn / 4; // 1/16 = 24 ticks
+    const uint32_t from = (uint32_t) ((c * (int64_t) win) % clip.lengthTicks);
+    const uint32_t to = from + win;
+    r.clipProgressUi = (double) from / clip.lengthTicks;
+    push({grid, 2, 0, 0, 0, (uint8_t) s, 0, (int16_t) (from * 16 / clip.lengthTicks)});
+    if (!q.active || q.muted) return;
+    const double beatsPerTick = L / win;
+    const double nudge = q.nudgeMs / 1000.0 * bpm / 60.0;
+    // notes are sorted by tick: binary search the window start
+    auto it = std::lower_bound(clip.notes.begin(), clip.notes.end(), from, [](const ClipNote& n, uint32_t t) { return n.tick < t; });
+    for (; it != clip.notes.end() && it->tick < to; ++it) {
+        double on = grid + (it->tick - from) * beatsPerTick + nudge;
+        int note = std::clamp((int) it->note + transposeOffset[(size_t) s], 0, 127);
+        push({on, 0, q.channel, (uint8_t) note, it->vel, (uint8_t) s, 0, 0});
+        push({on + std::max<uint32_t>(1, it->len) * beatsPerTick * 0.999, 1, q.channel, (uint8_t) note, 0, (uint8_t) s, 0, 0});
+    }
+}
+
 void Engine::process(const Transport& host, int numSamples, const std::vector<MidiIn>& in, std::vector<MidiOut>& out) {
     // ---- MIDI input: transposition (manual 3.15 "Trnsp")
     for (auto& m : in) {
@@ -608,6 +635,7 @@ void Engine::process(const Transport& host, int numSamples, const std::vector<Mi
                 if (q.mode == Mode::Matr) playMatriceal(s, t, r.nextGrid, L, tp.bpm);
                 else if (q.mode == Mode::Domino) playDomino(s, r.nextGrid, L, tp.bpm);
                 else if (q.mode == Mode::Saga) playSaga(s, r.nextGrid, L, tp.bpm);
+                else if (q.mode == Mode::Player) playClip(s, r.nextGrid, L, tp.bpm);
                 else scheduleStep(s, t, r.nextGrid, L, tp.bpm);
                 double nextL = L;
                 if (q.mode != Mode::Matr && tr.rndDiv > 0 && (int) (rand32() % 100) < tr.rndDiv) nextL = L * ((rand32() & 1) ? 2.0 : 0.5);

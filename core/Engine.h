@@ -42,6 +42,7 @@ public:
     std::array<uint8_t, kNumSeqs> soloMask {};  // multitrack solo bits (not saved)
 
     // --- state for the UI (lock free) ---
+    double clipProgress(int seq) const { return rt[(size_t) seq][0].clipProgressUi.load(std::memory_order_relaxed); }
     int dominoNotePos(int seq) const { return rt[(size_t) seq][0].domNoteUi.load(std::memory_order_relaxed); }
     int matLanePos(int seq, int track, int lane) const { return rt[(size_t) seq][(size_t) track].lanePos[(size_t) lane].load(std::memory_order_relaxed); }
     int playhead(int seq, int track) const { return rt[(size_t) seq][(size_t) track].playheadUi.load(std::memory_order_relaxed); }
@@ -73,6 +74,7 @@ private:
         int lastNote = -1, lastVel = 0; uint8_t lastCh = 0; double lastDur = 0.0;
         int64_t domNote = -1;      // domino: note section step counter
         std::atomic<int> domNoteUi { -1 };
+        std::atomic<double> clipProgressUi { 0.0 };
         std::atomic<int> playheadUi { -1 };
     };
 
@@ -101,6 +103,7 @@ private:
     void playMatriceal(int s, int t, double grid, double L, double bpm);
     void playDomino(int s, double grid, double L, double bpm);
     void playSaga(int s, double grid, double L, double bpm);
+    void playClip(int s, double grid, double L, double bpm);
     double trackStepLength(int s, int t) const;
 
     Project& proj;

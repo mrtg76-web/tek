@@ -194,6 +194,7 @@ void Controller::padDown(int x, int y, double nowMs) {
     if (grid == GridMode::Load) { loadPad(x, y, nowMs); return; }
     if (grid == GridMode::Column) { columnPad(x, y, nowMs); return; }
 
+    if (isPlayer()) { msg("SHIFT + PERF: LOAD A MIDI FILE", nowMs); heldPads.push_back({x, y, nowMs, true}); return; }
     if (isMatr()) { matPadDown(x, y, nowMs); return; }
     if (hasKeys()) { domPadDown(x, y, nowMs); return; }
     const int idx = stepAt(x);
@@ -891,6 +892,38 @@ void Controller::renderSagaDisplay(Frame& f) const {
     else set("RDur", "x" + std::to_string(st.repDur), "Rpt%", std::to_string(st.repProb), "Oct", std::to_string(st.octave), "-", "");
 }
 
+// ============================================================================ MIDI player (manual 6.12)
+void Controller::setClip(int s, MidiClip clip, double nowMs) {
+    if (s < 0 || s >= kNumSeqs) return;
+    int keep = sel; sel = s; pushUndo(); sel = keep;
+    auto& q = proj.seqs[(size_t) s];
+    const size_t n = clip.notes.size();
+    const std::string nm = clip.name;
+    q.pat().clip = std::move(clip);
+    msg("LOADED " + nm + " (" + std::to_string(n) + " notes)", nowMs, 2500.0);
+}
+
+void Controller::renderPlayer(Frame& f) const {
+    const auto& q = seq();
+    const auto& clip = q.pat().clip;
+    const uint32_t col = seqColor(q.color);
+    if (clip.notes.empty() || clip.lengthTicks == 0) return;
+    int lo = 127, hi = 0;
+    for (auto& n : clip.notes) { lo = std::min<int>(lo, n.note); hi = std::max<int>(hi, n.note); }
+    const int span = std::max(1, hi - lo + 1);
+    for (auto& n : clip.notes) {
+        int x = (int) ((uint64_t) n.tick * 16 / clip.lengthTicks);
+        int x2 = (int) ((uint64_t) (n.tick + n.len - 1) * 16 / clip.lengthTicks);
+        int row = (n.note - lo) * 8 / span;
+        int y = 7 - std::clamp(row, 0, 7);
+        for (int xx = x; xx <= std::min(15, x2); ++xx) f.pads[(size_t) (y * 16 + xx)] = xx == x ? col : dim(col, 0.4f);
+    }
+    if (eng.isRunning()) {
+        int px = (int) (eng.clipProgress(sel) * 16) % 16;
+        for (int y = 0; y < 8; ++y) { auto& c = f.pads[(size_t) (y * 16 + px)]; c = c ? mix(c, 0xffffff, 0.5f) : 0x4a4d53; }
+    }
+}
+
 // ============================================================================ encoders
 void Controller::relative(uint8_t Step::*field, int delta, int lo, int hi, const char* name, double nowMs) {
     auto& tr = (isDomino() && field == &Step::repeats) ? track() : noteTrack();
@@ -1212,6 +1245,7 @@ void Controller::changeMode(Mode m, double nowMs) {
     if (m == Mode::Mono) // keep the first note of each step
         for (auto& p : q.patterns) for (auto& st : p.tracks[0].steps) if (st.numNotes > 1) st.numNotes = 1;
     q.mode = m;
+    if (m == Mode::Player) { q.scale = 0; q.rootPc = 0; } // MIDI player: chromatic / root C
     selTrack[(size_t) sel] = 0;
     msg(std::string("MODE ") + modeLabel(m), nowMs);
 }
@@ -1456,7 +1490,11 @@ void Controller::button(Btn b, bool down, double nowMs) {
             break;
         case Btn::Load: grid = grid == GridMode::Load ? GridMode::Steps : GridMode::Load; break;
         case Btn::Save: msg("SAVED WITH THE ABLETON SET", nowMs); break;
-        case Btn::Perf: case Btn::Gen: case Btn::Mod: case Btn::Arranger: case Btn::Keyboard:
+        case Btn::Perf:
+            if (shift && isPlayer()) { midiLoadReq = true; midiLoadSeq = sel; msg("CHOOSE A .MID FILE", nowMs); break; }
+            msg(shift ? "PROJECT MENU: PHASE 3 (MIDI file: PLYR mode)" : "PERFORM: COMING IN A LATER PHASE", nowMs);
+            break;
+        case Btn::Gen: case Btn::Mod: case Btn::Arranger: case Btn::Keyboard:
         case Btn::Random:
             if (isMatr()) { msg("HOLD RANDOM + TAP A LANE PAD", nowMs); break; }
             msg(std::string(btnLabel(b)) + ": COMING IN A LATER PHASE", nowMs);
@@ -1600,6 +1638,12 @@ void Controller::renderDisplay(Frame& f, double nowMs) const {
     if (isMatr() && menu == Menu::None && grid == GridMode::Steps) renderMatrDisplay(f);
     if (isDomino() && menu == Menu::None && grid == GridMode::Steps && !held(Btn::Shift)) renderDominoDisplay(f);
     if (isSaga() && menu == Menu::None && grid == GridMode::Steps && !held(Btn::Shift)) renderSagaDisplay(f);
+    if (isPlayer() && menu == Menu::None && !held(Btn::Shift)) {
+        const auto& clip = q.pat().clip;
+        f.line1 = clip.notes.empty() ? std::string("No MIDI file - Shift + PERF") : (clip.name.empty() ? std::string("MIDI file") : clip.name);
+        f.line2 = clip.notes.empty() ? "" : std::to_string(clip.notes.size()) + " notes  " + std::to_string(clip.lengthTicks / (kClipPpqn * 4)) + " bars  " + std::to_string((int) (eng.clipProgress(sel) * 100)) + "%";
+        f.labels = {"", "", "", ""}; f.values = {"", "", "", ""};
+    }
     if (nowMs < messageUntil) f.message = message;
 }
 
@@ -1762,7 +1806,7 @@ void Controller::render(Frame& f, double nowMs) const {
     f.labels = {}; f.values = {}; f.message.clear();
 
     // follow the playhead page
-    if (follow && eng.isRunning() && grid != GridMode::Load && !hasKeys() && !isMatr() && !isStoch()) {
+    if (follow && eng.isRunning() && grid != GridMode::Load && !hasKeys() && !isMatr() && !isStoch() && !isPlayer()) {
         int ph = eng.playhead(sel, trackIndex());
         if (ph >= 0) const_cast<Controller*>(this)->page[(size_t) sel] = ph / 16;
     }
@@ -1774,6 +1818,7 @@ void Controller::render(Frame& f, double nowMs) const {
     else if (isMatr()) renderMatr(f);
     else if (isDomino()) renderDomino(f);
     else if (isSaga()) renderSaga(f);
+    else if (isPlayer()) renderPlayer(f);
     else renderSteps(f, nowMs);
     renderDisplay(f, nowMs);
 

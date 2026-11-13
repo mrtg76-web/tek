@@ -1,6 +1,16 @@
-# TEK — 8 kanallı performans sequencer'ı (Faz 1 + Faz 2: Chord, Stochastic, Matriceal, Domino, Saga)
+# TEK — 8 kanallı performans sequencer'ı (Faz 1 + Faz 2: Chord, Stochastic, Matriceal, Domino, Saga, MIDI Player)
 
 TEK, OXI ONE MKII kılavuzunu temel alan bir VST3/AU sequencer plugin'i. Ses üretmiyor, MIDI üretiyor. Ableton'daki synth'leri, drum rack'leri ve harici cihazları sürüyor.
+
+## Faz 2: MIDI Player modu (yeni)
+
+Setup'ta knob 4 ile **PLYR** seç. Ardından **Shift + PERF**'e bas ve bilgisayarından bir **.mid** dosyası seç. Sequencer dosyadaki notaları döngü halinde, Ableton'a senkron çalar.
+
+- Yalnızca nota on/off bilgisi alınır. CC, pitch bend ve sysex yok sayılır. En fazla 2000 nota, 96 PPQN çözünürlük.
+- Dosya projeye gömülür. Ableton setini kaydettiğinde dosya da onunla birlikte kaydedilir; orijinal .mid dosyası gerekmez.
+- Grid'de mini bir piyano rulo görünür, beyaz sütun çalma konumudur. Ekranda dosya adı, nota sayısı, uzunluk ve ilerleme yüzdesi görünür.
+- Notalar sequencer'ın MIDI kanalından çıkar. Transpoze (Trnsp), mute ve nudge çalışır.
+- Her pattern ayrı bir MIDI dosyası taşıyabilir. LOAD görünümünden pattern değiştirerek dosyalar arasında geçiş yaparsın.
 
 ## Faz 2: Saga modu (yeni)
 

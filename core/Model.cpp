@@ -85,6 +85,25 @@ void euclid(int len, int pulses, int rot, bool* out) {
     }
 }
 
+// ---------------------------------------------------------------- midi clip
+MidiClip makeClip(std::vector<ClipNote> notes, int ppqn, const std::string& name) {
+    MidiClip c;
+    c.name = name;
+    if (ppqn <= 0) ppqn = kClipPpqn;
+    for (auto& n : notes) {
+        n.tick = (uint32_t) ((uint64_t) n.tick * kClipPpqn / (uint64_t) ppqn);
+        n.len = std::max<uint32_t>(1, (uint32_t) ((uint64_t) n.len * kClipPpqn / (uint64_t) ppqn));
+    }
+    std::stable_sort(notes.begin(), notes.end(), [](const ClipNote& a, const ClipNote& b) { return a.tick < b.tick; });
+    if (notes.size() > (size_t) kMaxClipNotes) notes.resize((size_t) kMaxClipNotes);
+    uint32_t end = 0;
+    for (auto& n : notes) end = std::max(end, n.tick + n.len);
+    const uint32_t bar = kClipPpqn * 4;
+    c.lengthTicks = std::max<uint32_t>(bar, (end + bar - 1) / bar * bar);
+    c.notes = std::move(notes);
+    return c;
+}
+
 // ---------------------------------------------------------------- project
 bool Pattern::isEmpty() const {
     for (auto& t : tracks) for (auto& s : t.steps) if (s.active) return false;
@@ -199,6 +218,14 @@ std::string serialize(const Project& p) {
         for (int pi = 0; pi < kNumPatterns; ++pi) {
             const auto& pat = q.patterns[(size_t) pi];
             o << "PAT " << s << ' ' << pi << ' ' << (int) pat.swing << '\n';
+            if (!pat.clip.notes.empty()) {
+                std::string nm = pat.clip.name;
+                for (auto& c : nm) if (c == ' ' || c == '\n' || c == '\r' || c == '\t') c = '_';
+                o << "CLN " << s << ' ' << pi << ' ' << (nm.empty() ? "-" : nm) << '\n';
+                o << "CLP " << s << ' ' << pi << ' ' << pat.clip.lengthTicks << ' ' << pat.clip.notes.size();
+                for (auto& n : pat.clip.notes) o << ' ' << n.tick << ' ' << n.len << ' ' << (int) n.note << ' ' << (int) n.vel;
+                o << '\n';
+            }
             {
                 static const MatTrack defTrack;
                 for (int t = 0; t < kNumMatTracks; ++t) {
@@ -268,6 +295,12 @@ bool deserialize(const std::string& str, Project& p) {
     while (std::getline(in, line)) {
         std::istringstream l(line);
         std::string tag; l >> tag;
+        if (tag == "CLN") {
+            int s = -1, pi = -1; std::string nm;
+            l >> s >> pi >> nm;
+            if (s >= 0 && s < kNumSeqs && pi >= 0 && pi < kNumPatterns) p.seqs[(size_t) s].patterns[(size_t) pi].clip.name = nm == "-" ? "" : nm;
+            continue;
+        }
         std::vector<int> v; int x;
         while (l >> x) v.push_back(x);
         auto at = [&](size_t i) { return i < v.size() ? v[i] : 0; };
@@ -330,6 +363,19 @@ bool deserialize(const std::string& str, Project& p) {
             if (st.valid) for (int i = 0; i < kMaxSteps; ++i) {
                 st.pitch[(size_t) i] = clampv<int8_t>(at(20 + 2 * (size_t) i), -96, 96);
                 st.rhythm[(size_t) i] = clampv<uint8_t>(at(21 + 2 * (size_t) i), 0, 99);
+            }
+        } else if (tag == "CLP" && v.size() >= 4) {
+            int s = at(0), pi = at(1);
+            if (s < 0 || s >= kNumSeqs || pi < 0 || pi >= kNumPatterns) continue;
+            auto& clip = p.seqs[(size_t) s].patterns[(size_t) pi].clip;
+            clip.lengthTicks = (uint32_t) std::max(0, at(2));
+            int n = std::clamp(at(3), 0, kMaxClipNotes);
+            clip.notes.clear();
+            for (int k = 0; k < n && 4 + 4 * (size_t) k + 3 < v.size(); ++k) {
+                ClipNote cn;
+                cn.tick = (uint32_t) std::max(0, at(4 + 4 * (size_t) k)); cn.len = (uint32_t) std::max(1, at(5 + 4 * (size_t) k));
+                cn.note = clampv<uint8_t>(at(6 + 4 * (size_t) k), 0, 127); cn.vel = clampv<uint8_t>(at(7 + 4 * (size_t) k), 1, 127);
+                clip.notes.push_back(cn);
             }
         } else if (tag == "MTK" && v.size() >= 21) {
             int s = at(0), pi = at(1), t = at(2);

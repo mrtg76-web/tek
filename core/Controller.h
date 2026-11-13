@@ -42,6 +42,10 @@ public:
 
     int selectedSeq() const { return sel; }
     void resetUiState();          // call after loading a project
+    bool takeMidiLoadRequest() { bool r = midiLoadReq; midiLoadReq = false; return r; } // UI opens a file chooser
+    int midiLoadTarget() const { return midiLoadSeq; }
+    void setClip(int seq, MidiClip clip, double nowMs);
+    void showMessage(const std::string& m, double nowMs) { msg(m, nowMs, 2500.0); }
 
 private:
     enum class Menu { None, Setup, TrackM, StepM, Nudge, Bend, Groove };
@@ -57,6 +61,7 @@ private:
     bool isMatr() const { return seq().mode == Mode::Matr; }
     bool isDomino() const { return seq().mode == Mode::Domino; }
     bool isSaga() const { return seq().mode == Mode::Saga; }
+    bool isPlayer() const { return seq().mode == Mode::Player; }
     bool hasKeys() const { return isDomino() || isSaga(); }
     int noteRows() const { return isSaga() ? 6 : 2; }
     MatTrack& matTrack(int k) { return seq().pat().mat.tracks[(size_t) k]; }
@@ -92,6 +97,7 @@ private:
     void renderDomino(Frame& f) const;
     void renderDominoDisplay(Frame& f) const;
     void renderSaga(Frame& f) const;
+    void renderPlayer(Frame& f) const;
     void renderSagaDisplay(Frame& f) const;
     Track& noteTrack() { return seq().pat().tracks[isDomino() ? 0 : (size_t) trackIndex()]; }
     const Track& noteTrack() const { return seq().pat().tracks[isDomino() ? 0 : (size_t) trackIndex()]; }
@@ -170,6 +176,8 @@ private:
     std::string message;
     double messageUntil = 0.0;
     std::vector<double> tapTimes;
+    bool midiLoadReq = false;
+    int midiLoadSeq = 0;
 };
 
 } // namespace tek

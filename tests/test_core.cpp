@@ -413,6 +413,28 @@ static void testSaga() {
     CHECK(p2->seqs[0].pat().tracks[0].steps[1].dur == 3);
 }
 
+static void testPlayer() {
+    // 480 ppqn source: quarter notes C3, E3 and an eighth G3 at beat 2.5 -> one bar at 96 ppqn
+    std::vector<ClipNote> src = {{0, 480, 60, 100}, {480, 480, 64, 90}, {1200, 240, 67, 80}};
+    auto clip = makeClip(src, 480, "test");
+    CHECK(clip.lengthTicks == 384);
+    CHECK(clip.notes.size() == 3 && clip.notes[1].tick == 96 && clip.notes[2].tick == 240 && clip.notes[2].len == 48);
+    auto p = std::make_unique<Project>();
+    auto& q = p->seqs[2];
+    q.mode = Mode::Player;
+    q.pat().clip = clip;
+    Engine e(*p);
+    auto n = ons(run(e, 8.0));
+    CHECK(n.size() == 6); // two loops
+    if (n.size() == 6) {
+        CHECK(n[0].note == 60 && n[0].ch == 2); CHECK(std::fabs(n[1].ppq - 1.0) < 0.01); CHECK(std::fabs(n[2].ppq - 2.5) < 0.01);
+        CHECK(std::fabs(n[3].ppq - 4.0) < 0.01);
+    }
+    auto p2 = std::make_unique<Project>();
+    CHECK(deserialize(serialize(*p), *p2));
+    CHECK(p2->seqs[2].pat().clip.notes.size() == 3 && p2->seqs[2].pat().clip.name == "test" && p2->seqs[2].pat().clip.lengthTicks == 384);
+}
+
 int runControllerTests(); // defined in test_controller.cpp
 
 int main() {
@@ -431,6 +453,7 @@ int main() {
     testMatriceal();
     testDomino();
     testSaga();
+    testPlayer();
     failures += runControllerTests();
     if (failures == 0) std::printf("ALL TESTS PASSED\n");
     else std::printf("%d FAILURE(S)\n", failures);

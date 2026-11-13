@@ -17,9 +17,9 @@ constexpr int kNumTracks = 8;
 constexpr int kMaxPolyNotes = 7;
 constexpr int kNumGrooves = 14;
 
-enum class Mode : uint8_t { Mono = 0, Poly, Multi, Chord, Stoch, Matr, Domino, Saga, Count };
+enum class Mode : uint8_t { Mono = 0, Poly, Multi, Chord, Stoch, Matr, Domino, Saga, Player, Count };
 inline const char* modeLabel(Mode m) {
-    switch (m) { case Mode::Mono: return "MONO"; case Mode::Poly: return "POLY"; case Mode::Multi: return "MULT"; case Mode::Chord: return "CHRD"; case Mode::Stoch: return "STCH"; case Mode::Matr: return "MATR"; case Mode::Domino: return "DOMI"; case Mode::Saga: return "SAGA"; default: return "?"; }
+    switch (m) { case Mode::Mono: return "MONO"; case Mode::Poly: return "POLY"; case Mode::Multi: return "MULT"; case Mode::Chord: return "CHRD"; case Mode::Stoch: return "STCH"; case Mode::Matr: return "MATR"; case Mode::Domino: return "DOMI"; case Mode::Saga: return "SAGA"; case Mode::Player: return "PLYR"; default: return "?"; }
 }
 
 enum class Dir : uint8_t { Forward = 0, Reverse, Pendulum, Pong, Random, Drunk, Count };
@@ -156,10 +156,25 @@ struct Matriceal { std::array<MatTrack, kNumMatTracks> tracks; };
 // Euclidean rhythm (Bjorklund): writes `len` booleans with `pulses` hits spread evenly, rotated by `rot`.
 void euclid(int len, int pulses, int rot, bool* out);
 
+// MIDI Player mode (manual 6.12): note on/off data imported from a .mid file, 96 PPQN, looped.
+constexpr int kClipPpqn = 96;
+constexpr int kMaxClipNotes = 2000;
+struct ClipNote { uint32_t tick; uint32_t len; uint8_t note, vel; };
+struct MidiClip {
+    std::vector<ClipNote> notes;    // sorted by tick
+    uint32_t lengthTicks = 0;       // loop length (whole bars)
+    std::string name;
+};
+
+// Builds a clip from notes timed at `ppqn` ticks per quarter: converts to 96 PPQN, sorts, caps the note
+// count and rounds the loop length up to whole bars.
+MidiClip makeClip(std::vector<ClipNote> notes, int ppqn, const std::string& name);
+
 struct Pattern {
     std::array<Track, kNumTracks> tracks;
     Stochastic stoch;
     Matriceal mat;
+    MidiClip clip;
     uint8_t swing = 50;            // 10..90, 50 = none (saved with pattern, manual 4.8)
     bool isEmpty() const;
 };
