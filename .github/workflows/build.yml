@@ -8,7 +8,7 @@ jobs:
   tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Core tests
         run: |
           cmake -B build -DTEK_BUILD_PLUGIN=OFF -DCMAKE_BUILD_TYPE=Release
@@ -17,9 +17,9 @@ jobs:
 
   macos:
     needs: tests
-    runs-on: macos-14
+    runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: "Configure (universal - Apple Silicon + Intel/Rosetta)"
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DCMAKE_OSX_DEPLOYMENT_TARGET=10.15 -DTEK_BUILD_TESTS=OFF
       - name: Build
@@ -36,7 +36,7 @@ jobs:
           ditto "$A/Standalone/TEK.app" dist/TEK.app
           cp README.md dist/KURULUM.md
           lipo -info "$A/VST3/TEK.vst3/Contents/MacOS/TEK"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: TEK-mac
           path: dist
@@ -45,7 +45,7 @@ jobs:
     needs: tests
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Configure
         run: cmake -B build -DTEK_BUILD_TESTS=OFF
       - name: Build
@@ -56,7 +56,7 @@ jobs:
           mkdir -p dist
           cp -r build/TEK_artefacts/Release/VST3/TEK.vst3 dist/
           cp build/TEK_artefacts/Release/Standalone/TEK.exe dist/ || true
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: TEK-windows
           path: dist
