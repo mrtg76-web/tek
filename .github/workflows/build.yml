@@ -20,7 +20,7 @@ jobs:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
-      - name: Configure (universal: Apple Silicon + Intel/Rosetta)
+      - name: "Configure (universal - Apple Silicon + Intel/Rosetta)"
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DCMAKE_OSX_DEPLOYMENT_TARGET=10.15 -DTEK_BUILD_TESTS=OFF
       - name: Build
         run: cmake --build build --config Release --target TEK_VST3 TEK_AU TEK_Standalone -j4
