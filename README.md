@@ -1,8 +1,29 @@
-# TEK — 8 kanallı performans sequencer'ı (Faz 1 + Faz 2: Chord, Stochastic)
+# TEK — 8 kanallı performans sequencer'ı (Faz 1 + Faz 2: Chord, Stochastic, Matriceal)
 
 TEK, OXI ONE MKII kılavuzunu temel alan bir VST3/AU sequencer plugin'i. Ses üretmiyor, MIDI üretiyor. Ableton'daki synth'leri, drum rack'leri ve harici cihazları sürüyor.
 
-## Faz 2: Stochastic modu (yeni)
+## Faz 2: Matriceal modu (yeni)
+
+Setup'ta knob 4 ile **MATR** seç. Grid 4 dikey bölüme ayrılır, her bölüm bir iz (4 sütun genişliğinde):
+
+- **Üst 4 sıra:** izin seçili şeridinin 16 step'i (soldan sağa, yukarıdan aşağıya 1–16).
+- **Orta 3 sıra:** 10 şerit pad'i. Sıralama şöyle: Trigger (beyaz), Note (sarı), Interval (pembe), Pulses (turuncu) / Velocity (turkuaz), Octave (mavi), Gate (mor), Trig Prob (eflatun) / Retrig (yeşil), Glide (açık mavi). Şeridi seçmek için pad'ine dokun.
+- **En alt sıra:** izi seçer. MUTE + bu sıra izi susturur.
+
+Temel kural: nota yalnızca **Trigger** şeridindeki aktif step'lerde çalar. O anda diğer şeritler hangi değerdeyse nota o değerleri alır. Şerit uzunlukları farklı olunca desen sürekli değişir.
+
+- **Trigger step'i:** dokununca açılır/kapanır. Basılı tutarken knob 1/2 = Euclid Len/Puls, knob 3'e dokunmak = temizle, knob 4 = rastgelelik oranı (dokununca uygular).
+- **Diğer şeritlerin step'leri:** basılı tut (veya sağ tıkla) ve knob 1 ile değeri, knob 2 ile olasılığı ayarla. Pulses şeridinde knob 2 tipi seçer: First, All veya Tie. Ayarlı bir step'e kısa dokunmak onu sıfırlar.
+- **Şerit ayarları:** şerit pad'ini basılı tut. Knob 3 = division, knob 4 = yön. Interval şeridinde knob 1/2 = Min/Max.
+- **Şerit uzunluğu:** INIT veya END + step pad'i.
+- **İz ayarları:** iz pad'ini basılı tut veya TRACK'e bas. Ch, Ofs (temel nota) ve RLen (bu kadar adımda bir tüm şeritleri başa sarar) burada. Basılı tutarken knob 4'e dokunmak izi temizler.
+- **Rastgele şerit:** RANDOM'ı basılı tut ve bir şerit pad'ine dokun.
+- **Pulses:** step'i N adım tutar. Bu sürede bütün şeritler o step'te bekler.
+- **Interval:** her tetiklemede notayı ölçek aralığı kadar kaydırır. Min/Max'a ulaşınca başa döner.
+- Glide yalnızca CV için anlamlı olduğundan MIDI'de etkisi yok, değer olarak saklanıyor.
+- Kılavuzdaki 16×8 tam ekran şerit editörü (parametre pad'ine çift dokunma) sonraki güncellemeye kaldı.
+
+## Faz 2: Stochastic modu
 
 Setup'ta knob 4 ile **STCH** seç. Bu modda nota girmiyorsun: grid bir kontrol paneline dönüşüyor ve sequencer her döngüde yeni bir cümle üretiyor.
 

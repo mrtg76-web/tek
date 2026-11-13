@@ -101,6 +101,7 @@ void Controller::placeNote(Track& tr, int idx, int degree) {
 }
 
 void Controller::toggleStep(int x, int y, double nowMs) {
+    if (isMatr()) { matTap(x, y, nowMs); return; }
     pushUndo();
     if (lanesView()) {
         int t = 7 - y;
@@ -190,6 +191,7 @@ void Controller::padDown(int x, int y, double nowMs) {
     if (grid == GridMode::Load) { loadPad(x, y, nowMs); return; }
     if (grid == GridMode::Column) { columnPad(x, y, nowMs); return; }
 
+    if (isMatr()) { matPadDown(x, y, nowMs); return; }
     const int idx = stepAt(x);
     // track selection in multitrack lanes (column 1 selects, other columns select + edit)
     if (lanesView() && !held(Btn::Mute)) {
@@ -375,6 +377,228 @@ std::unique_ptr<Pattern> Controller::stochToPattern() const {
     return p;
 }
 
+// ============================================================================ matriceal (manual 6.9)
+// Grid: 4 sections of 4 columns (one per track). Rows 0-3: 16 steps of the section's selected lane,
+// rows 4-6: the 10 parameter lane pads, row 7: track select / mute.
+namespace {
+const uint32_t kLaneColor[kNumMatLanes] = {0xffffff, 0xffd23d, 0xff6fb5, 0xff8a2b, 0x2be0c8, 0x3d7bff, 0x9b5cff, 0xc77dff, 0x30d070, 0x7fd8ff};
+}
+
+void Controller::matRandomize(int k, int lane, double nowMs) {
+    auto& mt = matTrack(k);
+    auto& ln = mt.lanes[(size_t) lane];
+    pushUndo();
+    uint32_t seed = (uint32_t) (nowMs * 1000.0) ^ 0x9e3779b9u;
+    auto rnd = [&]() { seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5; return seed; };
+    const int amt = mt.rnd[(size_t) lane];
+    for (int i = ln.start; i <= ln.end; ++i) {
+        if ((int) (rnd() % 100) >= amt) { ln.val[(size_t) i] = (int8_t) std::min(127, matLaneDefault(lane)); continue; }
+        int lo = matLaneMin(lane), hi = std::min(127, matLaneMax(lane));
+        if (lane == kLaneNote) { lo = -7; hi = 7; }
+        if (lane == kLaneIntv) { lo = -3; hi = 3; }
+        if (lane == kLaneOct) { lo = -1; hi = 1; }
+        if (lane == kLanePuls) hi = 4;
+        if (lane == kLaneRetrig) { lo = 1; hi = 4; }
+        if (lane == kLaneGate) hi = 99;
+        ln.val[(size_t) i] = (int8_t) (lo + (int) (rnd() % (uint32_t) (hi - lo + 1)));
+    }
+    msg(std::string("RANDOM ") + matLaneName(lane) + " " + std::to_string(amt) + "%", nowMs);
+}
+
+void Controller::matPadDown(int x, int y, double nowMs) {
+    const int k = x / 4, cx = x % 4;
+    auto& mt = matTrack(k);
+    if (y == 7) { // track pad
+        if (held(Btn::Mute)) { btnConsumed[(int) Btn::Mute] = true; mt.muted = !mt.muted; msg("TRACK " + std::to_string(k + 1) + (mt.muted ? " MUTED" : " ON"), nowMs); heldPads.push_back({x, y, nowMs, true}); return; }
+        matSel[(size_t) sel] = k;
+        heldPads.push_back({x, y, nowMs, true});
+        return;
+    }
+    if (y >= 4) { // parameter lane pad
+        int lane = (y - 4) * 4 + cx;
+        if (lane >= kNumMatLanes) { heldPads.push_back({x, y, nowMs, true}); return; }
+        matSel[(size_t) sel] = k;
+        matLane[(size_t) sel][(size_t) k] = lane;
+        if (held(Btn::Random)) { btnConsumed[(int) Btn::Random] = true; matRandomize(k, lane, nowMs); }
+        else msg(std::string("T") + std::to_string(k + 1) + " " + matLaneName(lane), nowMs);
+        heldPads.push_back({x, y, nowMs, true});
+        return;
+    }
+    // step pad
+    const int step = y * 4 + cx;
+    matSel[(size_t) sel] = k;
+    auto& ln = mt.lanes[(size_t) matLaneOf(k)];
+    if (held(Btn::Init) || held(Btn::End)) {
+        pushUndo();
+        if (held(Btn::Init)) { int len = ln.end - ln.start; ln.start = (uint8_t) step; if (ln.start > ln.end) ln.end = (uint8_t) std::min(15, step + len); btnConsumed[(int) Btn::Init] = true; }
+        else { ln.end = (uint8_t) step; if (ln.end < ln.start) ln.start = ln.end; btnConsumed[(int) Btn::End] = true; }
+        msg(std::string(matLaneName(matLaneOf(k))) + " " + std::to_string(ln.start + 1) + "-" + std::to_string(ln.end + 1), nowMs);
+        heldPads.push_back({x, y, nowMs, true});
+        return;
+    }
+    heldPads.push_back({x, y, nowMs, false});
+}
+
+void Controller::matTap(int x, int y, double nowMs) {
+    if (y > 3) return;
+    const int k = x / 4, step = y * 4 + x % 4;
+    const int lane = matLaneOf(k);
+    auto& ln = matTrack(k).lanes[(size_t) lane];
+    pushUndo();
+    if (lane == kLaneTrig) { ln.val[(size_t) step] = ln.val[(size_t) step] ? 0 : 1; return; }
+    if (ln.val[(size_t) step] != std::min(127, matLaneDefault(lane))) { ln.val[(size_t) step] = (int8_t) std::min(127, matLaneDefault(lane)); ln.prob[(size_t) step] = 100; msg("STEP RESET", nowMs); }
+    else msg("HOLD STEP + KNOB 1 TO SET", nowMs);
+}
+
+void Controller::matKnob(int knob, int delta, double nowMs) {
+    const auto& h = heldPads.front();
+    const int k = h.x / 4;
+    auto& mt = matTrack(k);
+    for (auto& hp : heldPads) hp.consumed = true;
+    pushUndo();
+    if (h.y == 7) { // track settings: Ch, Ofs, RLen, Clr
+        if (knob == 0) mt.channel = clampT<uint8_t>(mt.channel + delta, 0, 15);
+        if (knob == 1) mt.baseNote = clampT<uint8_t>(mt.baseNote + delta, 0, 127);
+        if (knob == 2) mt.rlen = clampT<uint8_t>(mt.rlen + delta, 0, 64);
+        return;
+    }
+    const int lane = h.y >= 4 ? (h.y - 4) * 4 + h.x % 4 : matLaneOf(k);
+    if (lane >= kNumMatLanes) return;
+    auto& ln = mt.lanes[(size_t) lane];
+    if (h.y >= 4) { // lane settings: (Min, Max), Div, Dir
+        if (knob == 0 && lane == kLaneIntv) mt.intMin = clampT<int8_t>(mt.intMin + delta, -24, 0);
+        if (knob == 1 && lane == kLaneIntv) mt.intMax = clampT<int8_t>(mt.intMax + delta, 0, 24);
+        if (knob == 2) ln.div = clampT<Division>((int) ln.div + delta, 0, (int) Division::Count - 1);
+        if (knob == 3) ln.dir = clampT<Dir>((int) ln.dir + delta, 0, (int) Dir::Count - 1);
+        return;
+    }
+    if (knob == 3) { mt.rnd[(size_t) lane] = clampT<uint8_t>(mt.rnd[(size_t) lane] + delta * 5, 0, 100); return; }
+    if (lane == kLaneTrig) { // Len / Puls: euclidean generator
+        if (knob == 0) mt.eucLen = clampT<uint8_t>(mt.eucLen + delta, 1, 16);
+        if (knob == 1) mt.eucPulses = clampT<uint8_t>(mt.eucPulses + delta, 0, mt.eucLen);
+        if (knob <= 1) {
+            if (mt.eucPulses > mt.eucLen) mt.eucPulses = mt.eucLen;
+            bool e[16];
+            euclid(mt.eucLen, mt.eucPulses, 0, e);
+            for (int i = 0; i < 16; ++i) ln.val[(size_t) i] = 0;
+            for (int i = 0; i < mt.eucLen; ++i) ln.val[(size_t) ((ln.start + i) % 16)] = e[i] ? 1 : 0;
+            ln.end = (uint8_t) std::min(15, ln.start + mt.eucLen - 1);
+            msg("EUCLID " + std::to_string(mt.eucPulses) + "/" + std::to_string(mt.eucLen), nowMs);
+        }
+        return;
+    }
+    for (auto& hp : heldPads) {
+        if (hp.y > 3 || hp.x / 4 != k) continue;
+        int step = hp.y * 4 + hp.x % 4;
+        if (knob == 0) ln.val[(size_t) step] = (int8_t) std::clamp(ln.val[(size_t) step] + delta, matLaneMin(lane), std::min(127, matLaneMax(lane)));
+        if (knob == 1) {
+            if (lane == kLanePuls) ln.aux[(size_t) step] = clampT<uint8_t>(ln.aux[(size_t) step] + delta, 0, 2);
+            else ln.prob[(size_t) step] = clampT<uint8_t>(ln.prob[(size_t) step] + delta * 5, 0, 100);
+        }
+    }
+}
+
+void Controller::matKnobTap(int knob, double nowMs) {
+    const auto& h = heldPads.front();
+    const int k = h.x / 4;
+    for (auto& hp : heldPads) hp.consumed = true;
+    auto& mt = matTrack(k);
+    if (h.y == 7) {
+        if (knob == 3) { pushUndo(); auto ch = mt.channel; auto base = mt.baseNote; mt = MatTrack(); mt.channel = ch; mt.baseNote = base; msg("TRACK " + std::to_string(k + 1) + " CLEARED", nowMs); }
+        return;
+    }
+    if (h.y >= 4) return;
+    const int lane = matLaneOf(k);
+    auto& ln = mt.lanes[(size_t) lane];
+    if (knob == 2) { pushUndo(); ln.val.fill((int8_t) std::min(127, matLaneDefault(lane))); ln.prob.fill(100); ln.aux.fill(0); msg(std::string(matLaneName(lane)) + " CLEARED", nowMs); }
+    else if (knob == 3) matRandomize(k, lane, nowMs);
+    else if (knob == 0 && lane != kLaneTrig) {
+        pushUndo();
+        for (auto& hp : heldPads) if (hp.y <= 3 && hp.x / 4 == k) ln.val[(size_t) (hp.y * 4 + hp.x % 4)] = (int8_t) std::min(127, matLaneDefault(lane));
+    }
+}
+
+void Controller::renderMatr(Frame& f) const {
+    const auto& q = seq();
+    for (int k = 0; k < kNumMatTracks; ++k) {
+        const auto& mt = matTrack(k);
+        const int lane = matLaneOf(k);
+        const auto& ln = mt.lanes[(size_t) lane];
+        const bool selT = matSel[(size_t) sel] == k;
+        const uint32_t lc = kLaneColor[lane];
+        const int ph = eng.isRunning() ? (lane == kLaneTrig ? eng.playhead(sel, k) : eng.matLanePos(sel, k, lane)) : -1;
+        const int def = std::min(127, matLaneDefault(lane));
+        const int span = std::max(1, std::max(std::abs(std::min(127, matLaneMax(lane)) - def), std::abs(def - matLaneMin(lane))));
+        for (int st = 0; st < 16; ++st) {
+            const int x = k * 4 + st % 4, y = st / 4;
+            const bool inRange = st >= ln.start && st <= ln.end;
+            int v = ln.val[(size_t) st];
+            uint32_t c = inRange ? 0x34373b : 0x101010;
+            if (lane == kLaneTrig) { if (v) c = inRange ? 0xffffff : 0x505050; }
+            else if (v != def) {
+                float a = 0.3f + 0.7f * std::min(1.0f, std::abs(v - def) / (float) span);
+                bool neg = (lane == kLaneNote || lane == kLaneIntv || lane == kLaneOct) && v < def;
+                if (lane == kLaneProb) a = 0.3f + 0.7f * (1.0f - v / 100.0f);
+                c = dim(neg ? 0xff3030 : lc, inRange ? a : a * 0.4f);
+            }
+            if (st == ph && inRange) c = c == 0x34373b ? 0x6a6d73 : mix(c, 0xffffff, 0.45f);
+            f.pads[(size_t) (y * 16 + x)] = c;
+        }
+        for (int l = 0; l < 12; ++l) {
+            const int x = k * 4 + l % 4, y = 4 + l / 4;
+            uint32_t c = 0;
+            if (l < kNumMatLanes) c = l == lane ? kLaneColor[l] : dim(kLaneColor[l], selT ? 0.35f : 0.22f);
+            f.pads[(size_t) (y * 16 + x)] = c;
+        }
+        for (int i = 0; i < 4; ++i) {
+            uint32_t c = selT ? (mt.muted ? 0xc03030 : 0xffffff) : (mt.muted ? 0x000000 : 0x505050);
+            f.pads[(size_t) (7 * 16 + k * 4 + i)] = c;
+        }
+    }
+    (void) q;
+}
+
+void Controller::renderMatrDisplay(Frame& f) const {
+    const int k = heldPads.empty() ? matSel[(size_t) sel] : heldPads.front().x / 4;
+    const auto& mt = matTrack(k);
+    const int lane = matLaneOf(k);
+    const auto& ln = mt.lanes[(size_t) lane];
+    auto set = [&](const char* a, const std::string& av, const char* b, const std::string& bv, const char* c, const std::string& cv, const char* d, const std::string& dv) {
+        f.labels = {a, b, c, d}; f.values = {av, bv, cv, dv};
+    };
+    auto onoff = [](int v) { return v == 0 ? std::string("OFF") : std::to_string(v); };
+    f.line1 = "T" + std::to_string(k + 1) + " " + matLaneName(lane) + "   " + divisionLabel(ln.div) + " " + dirLabel(ln.dir) + "  " + std::to_string(ln.start + 1) + "-" + std::to_string(ln.end + 1);
+    f.line2 = "Ch" + std::to_string(mt.channel + 1) + "  Ofs " + noteName(mt.baseNote) + (mt.muted ? "  MUTED" : "");
+    if (heldPads.empty()) { set("TRK", std::to_string(k + 1), "LANE", matLaneName(lane), "RLen", onoff(mt.rlen), "Rnd", std::to_string(mt.rnd[(size_t) lane]) + "%"); return; }
+    const auto& h = heldPads.front();
+    if (h.y == 7) { f.line1 = "Track " + std::to_string(k + 1) + " Menu"; set("Ch", std::to_string(mt.channel + 1), "Ofs", noteName(mt.baseNote), "RLen", onoff(mt.rlen), "Clr", "tap"); return; }
+    if (h.y >= 4) {
+        int hl = (h.y - 4) * 4 + h.x % 4;
+        if (hl >= kNumMatLanes) return;
+        const auto& hln = mt.lanes[(size_t) hl];
+        f.line1 = std::string(matLaneName(hl)) + "  lane settings";
+        if (hl == kLaneIntv) set("Min", std::to_string(mt.intMin), "Max", std::to_string(mt.intMax), "Div", divisionLabel(hln.div), "Dir", dirLabel(hln.dir));
+        else set("-", "", "-", "", "Div", divisionLabel(hln.div), "Dir", dirLabel(hln.dir));
+        return;
+    }
+    const int step = h.y * 4 + h.x % 4;
+    const int v = ln.val[(size_t) step];
+    f.line1 = std::string(matLaneName(lane)) + " - Step " + std::to_string(step + 1);
+    const std::string rnd = std::to_string(mt.rnd[(size_t) lane]) + "%";
+    switch (lane) {
+        case kLaneTrig: set("Len", std::to_string(mt.eucLen), "Puls", std::to_string(mt.eucPulses), "Clr", "tap", "Rnd", rnd); break;
+        case kLaneNote: set("Note", noteName(mt.baseNote + degreeToSemis(seq().scale, v)), "Prob", std::to_string(ln.prob[(size_t) step]) + "%", "Clr", "tap", "Rnd", rnd); break;
+        case kLaneIntv: set("Intv", (v > 0 ? "+" : "") + std::to_string(v), "Prob", std::to_string(ln.prob[(size_t) step]) + "%", "Clr", "tap", "Rnd", rnd); break;
+        case kLanePuls: { static const char* t[3] = {"First", "All", "Tie"}; set("Puls", std::to_string(v), "Type", t[std::min<int>(2, ln.aux[(size_t) step])], "Clr", "tap", "Rnd", rnd); break; }
+        case kLaneVel: set("Vel", std::to_string(v), "-", "", "Clr", "tap", "Rnd", rnd); break;
+        case kLaneOct: set("Oct", (v > 0 ? "+" : "") + std::to_string(v), "Prob", std::to_string(ln.prob[(size_t) step]) + "%", "Clr", "tap", "Rnd", rnd); break;
+        case kLaneGate: set("Gate", v >= 101 ? "TIE" : v == 100 ? "LEG" : std::to_string(v), "-", "", "Clr", "tap", "Rnd", rnd); break;
+        case kLaneProb: set("Prob", std::to_string(v) + "%", "-", "", "Clr", "tap", "Rnd", rnd); break;
+        case kLaneRetrig: set("Rep", v == 0 ? "SKIP" : std::to_string(v), "Prob", std::to_string(ln.prob[(size_t) step]) + "%", "Clr", "tap", "Rnd", rnd); break;
+        default: set("Glid", std::to_string(v), "Prob", std::to_string(ln.prob[(size_t) step]) + "%", "Clr", "tap", "Rnd", rnd); break;
+    }
+}
+
 // ============================================================================ encoders
 void Controller::relative(uint8_t Step::*field, int delta, int lo, int hi, const char* name, double nowMs) {
     auto& tr = track();
@@ -458,6 +682,7 @@ void Controller::editHeldSteps(int knob, int delta, double nowMs) {
 }
 
 void Controller::editGlobal(int knob, int delta, double nowMs) {
+    if (isMatr()) { (void) knob; (void) delta; msg("HOLD A STEP, LANE OR TRACK PAD", nowMs); return; }
     switch (knob) {
         case 0: relative(&Step::velocity, delta, 1, 127, "Vel", nowMs); break;
         case 1:
@@ -528,7 +753,12 @@ void Controller::editMenu(int knob, int delta, double nowMs) {
             break;
         case Menu::TrackM:
             pushUndo();
-            if (isMulti()) {
+            if (isMatr()) {
+                auto& mt = matTrack(matSel[(size_t) sel]);
+                if (knob == 0) mt.channel = clampT<uint8_t>(mt.channel + delta, 0, 15);
+                if (knob == 1) mt.baseNote = clampT<uint8_t>(mt.baseNote + delta, 0, 127);
+                if (knob == 2) mt.rlen = clampT<uint8_t>(mt.rlen + delta, 0, 64);
+            } else if (isMulti()) {
                 if (menuPage == 0) {
                     if (knob == 0) tr.channel = clampT<uint8_t>(tr.channel + delta, 0, 15);
                     if (knob == 1) tr.baseNote = clampT<uint8_t>(tr.baseNote + delta, 0, 127);
@@ -598,6 +828,7 @@ void Controller::editMenu(int knob, int delta, double nowMs) {
 void Controller::encoderTurn(int knob, int delta, double nowMs) {
     if (knob < 0 || knob > 3 || delta == 0) return;
     if (encDown[(size_t) knob]) encConsumed[(size_t) knob] = true;
+    if (isMatr() && grid == GridMode::Steps && !heldPads.empty() && menu == Menu::None) { matKnob(knob, delta, nowMs); return; }
     if (grid == GridMode::Steps && !heldPads.empty() && menu == Menu::None) { editHeldSteps(knob, delta, nowMs); return; }
     if (held(Btn::Init) || held(Btn::End)) {
         btnConsumed[(int) Btn::Init] = btnConsumed[(int) Btn::End] = true;
@@ -614,6 +845,7 @@ void Controller::encoderTurn(int knob, int delta, double nowMs) {
 }
 
 void Controller::tapKnob(int knob, double nowMs) {
+    if (isMatr() && grid == GridMode::Steps && !heldPads.empty() && menu == Menu::None) { matKnobTap(knob, nowMs); return; }
     // with a held step
     if (grid == GridMode::Steps && !heldPads.empty() && menu == Menu::None) {
         for (auto& h : heldPads) h.consumed = true;
@@ -652,6 +884,7 @@ void Controller::tapKnob(int knob, double nowMs) {
         return;
     }
     if (isStoch() && knob == 3) { msg("MOD LANE: PHASE 4", nowMs); return; }
+    if (isMatr()) { msg("HOLD A STEP, LANE OR TRACK PAD", nowMs); return; }
     int param = knob == 0 ? 0 : knob == 2 ? 1 : 2;
     if (grid == GridMode::Column && columnParam == param) grid = GridMode::Steps;
     else { grid = GridMode::Column; columnParam = param; }
@@ -896,6 +1129,7 @@ void Controller::button(Btn b, bool down, double nowMs) {
             break;
         case Btn::Paste:
             if (shift && isStoch()) { pushUndo(); seq().pat().stoch.valid = false; msg("NEW PHRASE", nowMs); break; }
+            if (shift && isMatr()) { pushUndo(); auto& mt = matTrack(matSel[(size_t) sel]); auto ch = mt.channel; auto base = mt.baseNote; mt = MatTrack(); mt.channel = ch; mt.baseNote = base; msg("TRACK CLEARED", nowMs); break; }
             if (shift) {
                 pushUndo();
                 if (isMulti()) { for (auto& st : track().steps) st.clear(); msg("CLEAR TRACK", nowMs); }
@@ -929,7 +1163,11 @@ void Controller::button(Btn b, bool down, double nowMs) {
         case Btn::Load: grid = grid == GridMode::Load ? GridMode::Steps : GridMode::Load; break;
         case Btn::Save: msg("SAVED WITH THE ABLETON SET", nowMs); break;
         case Btn::Perf: case Btn::Gen: case Btn::Mod: case Btn::Arranger: case Btn::Keyboard:
-        case Btn::Arp: case Btn::Random: case Btn::Rec:
+        case Btn::Random:
+            if (isMatr()) { msg("HOLD RANDOM + TAP A LANE PAD", nowMs); break; }
+            msg(std::string(btnLabel(b)) + ": COMING IN A LATER PHASE", nowMs);
+            break;
+        case Btn::Arp: case Btn::Rec:
             msg(std::string(btnLabel(b)) + ": COMING IN A LATER PHASE", nowMs);
             break;
         default: break;
@@ -995,7 +1233,11 @@ void Controller::renderDisplay(Frame& f, double nowMs) const {
             set(q.mode == Mode::Poly ? "nVoice" : isMulti() ? "T.Swg" : "-", a, mx ? "ChMx" : "-", mx ? (q.chMx ? "On" : "Off") : "", "-", "", "Color", std::to_string(q.color + 1));
         }
     } else if (menu == Menu::TrackM) {
-        if (isMulti()) {
+        if (isMatr()) {
+            const auto& mt = matTrack(matSel[(size_t) sel]);
+            f.line1 = "Track " + std::to_string(matSel[(size_t) sel] + 1) + " Menu";
+            set("Ch", std::to_string(mt.channel + 1), "Ofs", noteName(mt.baseNote), "RLen", onoff(mt.rlen), "-", "");
+        } else if (isMulti()) {
             f.line1 = "Track " + std::to_string(trackIndex() + 1) + " Menu  " + std::to_string(menuPage + 1) + "/2";
             if (menuPage == 0) set("Ch", std::to_string(tr.channel + 1), "Ofs", noteName(tr.baseNote), "Div", divisionLabel(tr.div), "Dir", dirLabel(tr.dir));
             else set("rDiv", onoff(tr.rndDiv), "T.Swg", tr.swing == 0 ? "Same" : std::to_string(tr.swing), "-", "", "-", "");
@@ -1060,6 +1302,7 @@ void Controller::renderDisplay(Frame& f, double nowMs) const {
         if (grid == GridMode::Column) f.line2 = columnParam == 0 ? "Velocity editor" : columnParam == 1 ? "Gate editor (top = LEG)" : "Retrig editor (Shift: repeats)";
         if (grid == GridMode::Load) { f.line1 = "LOAD: rows = sequencers, columns = patterns"; f.line2 = "Copy/Paste + pad, Shift + pad = clear"; }
     }
+    if (isMatr() && menu == Menu::None && grid == GridMode::Steps) renderMatrDisplay(f);
     if (nowMs < messageUntil) f.message = message;
 }
 
@@ -1231,6 +1474,7 @@ void Controller::render(Frame& f, double nowMs) const {
     else if (grid == GridMode::Column) renderColumn(f);
     else if (lanesView()) renderLanes(f, nowMs);
     else if (isStoch()) renderStoch(f);
+    else if (isMatr()) renderMatr(f);
     else renderSteps(f, nowMs);
     renderDisplay(f, nowMs);
 

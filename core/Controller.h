@@ -54,6 +54,10 @@ private:
     bool isMulti() const { return seq().mode == Mode::Multi; }
     bool isChord() const { return seq().mode == Mode::Chord; }
     bool isStoch() const { return seq().mode == Mode::Stoch; }
+    bool isMatr() const { return seq().mode == Mode::Matr; }
+    MatTrack& matTrack(int k) { return seq().pat().mat.tracks[(size_t) k]; }
+    const MatTrack& matTrack(int k) const { return seq().pat().mat.tracks[(size_t) k]; }
+    int matLaneOf(int k) const { return matLane[(size_t) sel][(size_t) k]; }
     int stepPages() const { return isChord() ? 4 : 3; }
     bool lanesView() const { return isMulti() && !pianoRoll[(size_t) sel]; }
     int trackIndex() const { return isMulti() ? selTrack[(size_t) sel] : 0; }
@@ -77,6 +81,13 @@ private:
     void columnPad(int x, int y, double nowMs);
     void loadPad(int x, int y, double nowMs);
     void stochPad(int x, int y, double nowMs);
+    void matPadDown(int x, int y, double nowMs);
+    void matTap(int x, int y, double nowMs);
+    void matKnob(int knob, int delta, double nowMs);
+    void matKnobTap(int knob, double nowMs);
+    void matRandomize(int k, int lane, double nowMs);
+    void renderMatr(Frame& f) const;
+    void renderMatrDisplay(Frame& f) const;
     void renderStoch(Frame& f) const;
     std::unique_ptr<Pattern> stochToPattern() const;
     void editHeldSteps(int knob, int delta, double nowMs);
@@ -110,6 +121,8 @@ private:
     std::array<int, kNumSeqs> page {};
     std::array<int, kNumSeqs> selTrack {};
     std::array<bool, kNumSeqs> pianoRoll {};
+    std::array<int, kNumSeqs> matSel {};                       // selected matriceal track
+    std::array<std::array<int, kNumMatTracks>, kNumSeqs> matLane {}; // selected lane per track
     std::array<std::array<int, kNumTracks>, kNumSeqs> viewDegree {};
     bool follow = true;
     bool scrollMode = false;

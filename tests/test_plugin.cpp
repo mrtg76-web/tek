@@ -69,6 +69,18 @@ int main() {
                 auto& tr = proc.project().seqs[0].pat().tracks[0];
                 tr.steps[6].active = true; tr.steps[6].numNotes = 1; tr.steps[6].notes[0] = 3; tr.steps[6].tie = 2;
                 tr.steps[10].active = true; tr.steps[10].numNotes = 1; tr.steps[10].notes[0] = 5;
+                if (juce::SystemStats::getEnvironmentVariable("TEK_SNAP_MATR", "").isNotEmpty()) {
+                    auto& q = proc.project().seqs[0];
+                    q.mode = tek::Mode::Matr;
+                    auto& m = q.pat().mat;
+                    for (int i : {0, 3, 6, 10, 13}) m.tracks[0].lanes[tek::kLaneTrig].val[(size_t) i] = 1;
+                    m.tracks[1].lanes[tek::kLaneNote].val = {0, 3, -2, 0, 5, 0, -4, 7, 0, 0, 2, 0, 0, -1, 0, 4};
+                    m.tracks[1].lanes[tek::kLaneNote].end = 11;
+                    proc.controller().padDown(5, 4, 0); proc.controller().padUp(5, 4, 1);
+                    m.tracks[2].lanes[tek::kLaneVel].val = {127, 40, 90, 20, 127, 60, 100, 75, 30, 75, 75, 110, 75, 75, 50, 75};
+                    proc.controller().padDown(8, 5, 0); proc.controller().padUp(8, 5, 1);
+                    m.tracks[3].muted = true;
+                }
                 if (juce::SystemStats::getEnvironmentVariable("TEK_SNAP_STOCH", "").isNotEmpty()) {
                     auto& q = proc.project().seqs[0];
                     q.mode = tek::Mode::Stoch; q.scale = 1;

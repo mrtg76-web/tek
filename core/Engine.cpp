@@ -53,11 +53,19 @@ double Engine::stepLength(const Sequencer& q, const Track& tr) const {
     return L / bend;
 }
 
+double Engine::trackStepLength(int s, int t) const {
+    const auto& q = proj.seqs[(size_t) s];
+    if (q.mode == Mode::Matr)
+        return divisionBeats(q.pat().mat.tracks[(size_t) t].lanes[kLaneTrig].div) / (1.0 + q.timeBend / 1000.0);
+    return stepLength(q, q.pat().tracks[(size_t) t]);
+}
+
 void Engine::initTrack(int s, int t, double ppq) {
     auto& q = proj.seqs[(size_t) s];
-    auto& tr = q.pat().tracks[(size_t) t];
     auto& r = rt[(size_t) s][(size_t) t];
-    double L = stepLength(q, tr);
+    double L = trackStepLength(s, t);
+    r.matActive = 0.0; r.matHold = 0; r.matAccum = 0; r.matTicks = 0; r.lastNote = -1;
+    r.laneCnt.fill(-1); for (auto& lp : r.lanePos) lp.store(0);
     int64_t idx = (int64_t) std::ceil(ppq / L - 1e-7);
     r.nextIdx = idx;
     r.nextGrid = idx * L;
@@ -332,6 +340,85 @@ void Engine::playStoch(int s, int pos, double grid, double L, double bpm, bool p
     else { double d = L / code; for (int i = 0; i < code; ++i) add(time + i * d, d * 0.5); }
 }
 
+// ---------------------------------------------------------------- matriceal mode (manual 6.9)
+void Engine::playMatriceal(int s, int t, double grid, double L, double bpm) {
+    auto& q = proj.seqs[(size_t) s];
+    auto& mt = q.pat().mat.tracks[(size_t) t];
+    auto& r = rt[(size_t) s][(size_t) t];
+    const bool silent = !q.active || q.muted || mt.muted;
+    const bool parity = (r.nextIdx % 2) != 0;
+    double time = grid + (parity ? (q.pat().swing - 50) / 50.0 * L : 0.0) + q.nudgeMs / 1000.0 * bpm / 60.0;
+
+    r.matTicks++;
+    if (mt.rlen > 0 && r.matTicks > mt.rlen) { // RLen: restart every lane
+        r.matTicks = 1; r.matActive = 0.0; r.matAccum = 0; r.matHold = 0; r.laneCnt.fill(-1);
+    }
+    auto emit = [&](double on, double dur, int note, int vel, uint8_t ch) {
+        push({on, 0, ch, (uint8_t) note, (uint8_t) std::clamp(vel, 1, 127), (uint8_t) s, (uint8_t) t, 0});
+        push({on + std::max(0.002, dur), 1, ch, (uint8_t) note, 0, (uint8_t) s, (uint8_t) t, 0});
+    };
+    if (r.matHold > 0) { // pulses hold every lane on the current step
+        r.matHold--;
+        if (r.matHoldType == 1 && r.lastNote >= 0 && !silent) emit(time, r.lastDur, r.lastNote, r.lastVel, r.lastCh);
+        return;
+    }
+    auto pos = [&](int l) {
+        const auto& ln = mt.lanes[(size_t) l];
+        double Ll = divisionBeats(ln.div) / (1.0 + q.timeBend / 1000.0);
+        int64_t c = (int64_t) std::floor(r.matActive / Ll + 1e-9);
+        if (c != r.laneCnt[(size_t) l]) {
+            int prev = r.laneCnt[(size_t) l] < 0 ? -1 : r.lanePos[(size_t) l].load();
+            r.laneCnt[(size_t) l] = c;
+            int p;
+            int len = ln.end - ln.start + 1;
+            if (ln.dir == Dir::Random) p = ln.start + (int) (rand32() % (uint32_t) std::max(1, len));
+            else if (ln.dir == Dir::Drunk) {
+                if (prev < ln.start || prev > ln.end) p = ln.start;
+                else { uint32_t x = rand32() % 4; p = prev + (x < 2 ? 1 : (x == 2 ? 0 : -1)); if (p > ln.end) p = ln.start; if (p < ln.start) p = ln.end; }
+            } else p = positionFor(ln.dir, ln.start, ln.end, c);
+            r.lanePos[(size_t) l].store(p);
+        }
+        return r.lanePos[(size_t) l].load();
+    };
+    int lp[kNumMatLanes];
+    auto value = [&](int l, bool useProb) {
+        const auto& ln = mt.lanes[(size_t) l];
+        int p = lp[l];
+        if (useProb && ln.prob[(size_t) p] < 100 && (int) (rand32() % 100) >= ln.prob[(size_t) p]) return matLaneDefault(l);
+        return (int) ln.val[(size_t) p];
+    };
+    // sample every lane at the current (hold-free) time, then advance it
+    for (int l = 0; l < kNumMatLanes; ++l) lp[l] = pos(l);
+    r.matActive += L;
+    push({grid, 2, 0, 0, 0, (uint8_t) s, (uint8_t) t, (int16_t) lp[kLaneTrig]});
+
+    if (mt.lanes[kLaneTrig].val[(size_t) lp[kLaneTrig]] == 0) return;
+    if ((int) (rand32() % 100) >= mt.lanes[kLaneProb].val[(size_t) lp[kLaneProb]]) return;
+
+    const int note = value(kLaneNote, true);
+    const int intv = value(kLaneIntv, true);
+    r.matAccum += intv;
+    if (r.matAccum > mt.intMax) r.matAccum = mt.intMin;
+    if (r.matAccum < mt.intMin) r.matAccum = mt.intMax;
+    const int oct = value(kLaneOct, true);
+    const int vel = mt.lanes[kLaneVel].val[(size_t) lp[kLaneVel]];
+    const int gate = mt.lanes[kLaneGate].val[(size_t) lp[kLaneGate]];
+    const int rep = value(kLaneRetrig, true);
+    const int puls = mt.lanes[kLanePuls].val[(size_t) lp[kLanePuls]];
+    const uint8_t ptype = mt.lanes[kLanePuls].aux[(size_t) lp[kLanePuls]];
+    r.matHold = std::max(0, puls - 1);
+    r.matHoldType = ptype;
+    if (rep == 0) return; // "skip"
+
+    const int midi = std::clamp((int) mt.baseNote + degreeToSemis(q.scale, note + r.matAccum) + 12 * oct + transposeOffset[(size_t) s], 0, 127);
+    double dur = gate >= 101 ? L * puls * 0.98 : gate == 100 ? L * 1.03 : gate / 100.0 * L;
+    if (ptype == 2) dur = L * puls * 0.98;
+    r.lastNote = midi; r.lastVel = vel; r.lastCh = mt.channel; r.lastDur = std::min(dur, L * 0.95);
+    if (silent) return;
+    if (rep > 1) { double d = L / rep; for (int i = 0; i < rep; ++i) emit(time + i * d, d * 0.5, midi, vel, mt.channel); }
+    else emit(time, dur, midi, vel, mt.channel);
+}
+
 void Engine::process(const Transport& host, int numSamples, const std::vector<MidiIn>& in, std::vector<MidiOut>& out) {
     // ---- MIDI input: transposition (manual 3.15 "Trnsp")
     for (auto& m : in) {
@@ -411,11 +498,12 @@ void Engine::process(const Transport& host, int numSamples, const std::vector<Mi
             int guard = 0;
             while (guard++ < 512) {
                 auto& tr = q.pat().tracks[(size_t) t];
-                double L = stepLength(q, tr);
+                double L = trackStepLength(s, t);
                 if (r.nextGrid - L > blockEnd) break;
-                scheduleStep(s, t, r.nextGrid, L, tp.bpm);
+                if (q.mode == Mode::Matr) playMatriceal(s, t, r.nextGrid, L, tp.bpm);
+                else scheduleStep(s, t, r.nextGrid, L, tp.bpm);
                 double nextL = L;
-                if (tr.rndDiv > 0 && (int) (rand32() % 100) < tr.rndDiv) nextL = L * ((rand32() & 1) ? 2.0 : 0.5);
+                if (q.mode != Mode::Matr && tr.rndDiv > 0 && (int) (rand32() % 100) < tr.rndDiv) nextL = L * ((rand32() & 1) ? 2.0 : 0.5);
                 r.nextGrid += nextL;
                 r.nextIdx++;
             }

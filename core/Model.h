@@ -17,9 +17,9 @@ constexpr int kNumTracks = 8;
 constexpr int kMaxPolyNotes = 7;
 constexpr int kNumGrooves = 14;
 
-enum class Mode : uint8_t { Mono = 0, Poly, Multi, Chord, Stoch, Count };
+enum class Mode : uint8_t { Mono = 0, Poly, Multi, Chord, Stoch, Matr, Count };
 inline const char* modeLabel(Mode m) {
-    switch (m) { case Mode::Mono: return "MONO"; case Mode::Poly: return "POLY"; case Mode::Multi: return "MULT"; case Mode::Chord: return "CHRD"; case Mode::Stoch: return "STCH"; default: return "?"; }
+    switch (m) { case Mode::Mono: return "MONO"; case Mode::Poly: return "POLY"; case Mode::Multi: return "MULT"; case Mode::Chord: return "CHRD"; case Mode::Stoch: return "STCH"; case Mode::Matr: return "MATR"; default: return "?"; }
 }
 
 enum class Dir : uint8_t { Forward = 0, Reverse, Pendulum, Pong, Random, Drunk, Count };
@@ -123,9 +123,42 @@ struct Stochastic {
     Stochastic() { noteLevel[0] = 8; }
 };
 
+// Matriceal mode (manual 6.9): 4 tracks x 10 independent parameter lanes of 16 steps.
+enum MatLaneId { kLaneTrig = 0, kLaneNote, kLaneIntv, kLanePuls, kLaneVel, kLaneOct, kLaneGate, kLaneProb, kLaneRetrig, kLaneGlide, kNumMatLanes };
+constexpr int kNumMatTracks = 4;
+int matLaneDefault(int lane);          // default value of a lane step
+int matLaneMin(int lane);
+int matLaneMax(int lane);
+const char* matLaneName(int lane);
+
+struct MatLane {
+    std::array<int8_t, 16> val {};     // step values (see matLaneDefault)
+    std::array<uint8_t, 16> prob {};   // per step probability % (note, interval, octave, retrig, glide)
+    std::array<uint8_t, 16> aux {};    // pulses: 0 first, 1 all, 2 tie
+    uint8_t start = 0, end = 15;
+    Division div = Division::Sixteenth;
+    Dir dir = Dir::Forward;
+};
+struct MatTrack {
+    std::array<MatLane, kNumMatLanes> lanes;
+    uint8_t channel = 0;
+    uint8_t baseNote = 48;             // "Ofs"
+    uint8_t rlen = 0;                  // reset length in trigger steps (+ pulses), 0 = off
+    bool muted = false;
+    int8_t intMin = -7, intMax = 7;    // interval accumulator range
+    std::array<uint8_t, kNumMatLanes> rnd {}; // randomisation amount % per lane
+    uint8_t eucLen = 16, eucPulses = 4;
+    MatTrack();
+};
+struct Matriceal { std::array<MatTrack, kNumMatTracks> tracks; };
+
+// Euclidean rhythm (Bjorklund): writes `len` booleans with `pulses` hits spread evenly, rotated by `rot`.
+void euclid(int len, int pulses, int rot, bool* out);
+
 struct Pattern {
     std::array<Track, kNumTracks> tracks;
     Stochastic stoch;
+    Matriceal mat;
     uint8_t swing = 50;            // 10..90, 50 = none (saved with pattern, manual 4.8)
     bool isEmpty() const;
 };

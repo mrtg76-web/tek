@@ -1,5 +1,6 @@
 #include "Model.h"
 #include <sstream>
+#include <algorithm>
 #include <vector>
 
 namespace tek {
@@ -51,6 +52,39 @@ std::string trigLabel(const Trig& t) {
     return "?";
 }
 
+// ---------------------------------------------------------------- matriceal
+int matLaneDefault(int l) {
+    switch (l) { case kLanePuls: case kLaneRetrig: return 1; case kLaneVel: return 75; case kLaneGate: return 50; case kLaneProb: return 100; default: return 0; }
+}
+int matLaneMin(int l) {
+    switch (l) { case kLaneTrig: return 0; case kLaneNote: return -24; case kLaneIntv: return -12; case kLanePuls: return 1; case kLaneVel: return 1;
+                 case kLaneOct: return -4; case kLaneGate: return 2; case kLaneProb: return 0; case kLaneRetrig: return 0; default: return 0; }
+}
+int matLaneMax(int l) {
+    switch (l) { case kLaneTrig: return 1; case kLaneNote: return 24; case kLaneIntv: return 12; case kLanePuls: return 9; case kLaneVel: return 127;
+                 case kLaneOct: return 4; case kLaneGate: return 101; case kLaneProb: return 100; case kLaneRetrig: return 6; default: return 100; }
+}
+const char* matLaneName(int l) {
+    static const char* n[kNumMatLanes] = {"TRIGGER", "NOTE", "INTERV", "PULSES", "VEL", "OCT", "GATE", "TRIG PROB", "RETRIG", "CV GLIDE"};
+    return n[std::clamp(l, 0, kNumMatLanes - 1)];
+}
+MatTrack::MatTrack() {
+    for (int l = 0; l < kNumMatLanes; ++l) {
+        lanes[(size_t) l].val.fill((int8_t) std::min(127, matLaneDefault(l)));
+        lanes[(size_t) l].prob.fill(100);
+        rnd[(size_t) l] = l == kLaneTrig || l == kLaneNote || l == kLaneIntv || l == kLanePuls || l == kLaneVel ? 50 : 33;
+    }
+}
+
+void euclid(int len, int pulses, int rot, bool* out) {
+    len = std::clamp(len, 1, 16);
+    pulses = std::clamp(pulses, 0, len);
+    for (int i = 0; i < len; ++i) {
+        int j = ((i - rot) % len + len) % len;
+        out[i] = pulses > 0 && ((j * pulses) % len) < pulses;
+    }
+}
+
 // ---------------------------------------------------------------- project
 bool Pattern::isEmpty() const {
     for (auto& t : tracks) for (auto& s : t.steps) if (s.active) return false;
@@ -63,7 +97,8 @@ void Project::reset() {
         s = Sequencer();
         s.channel = (uint8_t) i;
         s.color = (uint8_t) i;
-        for (auto& p : s.patterns)
+        for (auto& p : s.patterns) {
+            for (auto& mt : p.mat.tracks) mt.channel = (uint8_t) i;
             for (int t = 0; t < kNumTracks; ++t) {
                 auto& tr = p.tracks[(size_t) t];
                 tr.channel = (uint8_t) i;
@@ -71,6 +106,7 @@ void Project::reset() {
                 static const uint8_t drum[8] = {36, 38, 42, 46, 39, 45, 48, 51};
                 tr.baseNote = drum[t];
             }
+        }
     }
     bpm = 120.0;
     internalClock = false;
@@ -163,6 +199,29 @@ std::string serialize(const Project& p) {
         for (int pi = 0; pi < kNumPatterns; ++pi) {
             const auto& pat = q.patterns[(size_t) pi];
             o << "PAT " << s << ' ' << pi << ' ' << (int) pat.swing << '\n';
+            {
+                static const MatTrack defTrack;
+                for (int t = 0; t < kNumMatTracks; ++t) {
+                    const auto& mt = pat.mat.tracks[(size_t) t];
+                    std::ostringstream m;
+                    m << ' ' << (int) mt.channel << ' ' << (int) mt.baseNote << ' ' << (int) mt.rlen << ' ' << (int) mt.muted << ' '
+                      << (int) mt.intMin << ' ' << (int) mt.intMax << ' ' << (int) mt.eucLen << ' ' << (int) mt.eucPulses;
+                    for (auto r : mt.rnd) m << ' ' << (int) r;
+                    std::ostringstream d;
+                    d << ' ' << (int) defTrack.channel << ' ' << (int) defTrack.baseNote << ' ' << (int) defTrack.rlen << ' ' << (int) defTrack.muted << ' '
+                      << (int) defTrack.intMin << ' ' << (int) defTrack.intMax << ' ' << (int) defTrack.eucLen << ' ' << (int) defTrack.eucPulses;
+                    for (auto r : defTrack.rnd) d << ' ' << (int) r;
+                    if (m.str() != d.str() || mt.channel != s) o << "MTK " << s << ' ' << pi << ' ' << t << m.str() << '\n';
+                    for (int l = 0; l < kNumMatLanes; ++l) {
+                        const auto& ln = mt.lanes[(size_t) l];
+                        const auto& dl = defTrack.lanes[(size_t) l];
+                        if (ln.val == dl.val && ln.prob == dl.prob && ln.aux == dl.aux && ln.start == 0 && ln.end == 15 && ln.div == dl.div && ln.dir == dl.dir) continue;
+                        o << "MLN " << s << ' ' << pi << ' ' << t << ' ' << l << ' ' << (int) ln.start << ' ' << (int) ln.end << ' ' << (int) ln.div << ' ' << (int) ln.dir;
+                        for (int k = 0; k < 16; ++k) o << ' ' << (int) ln.val[(size_t) k] << ' ' << (int) ln.prob[(size_t) k] << ' ' << (int) ln.aux[(size_t) k];
+                        o << '\n';
+                    }
+                }
+            }
             {
                 const auto& st = pat.stoch;
                 Stochastic d;
@@ -265,6 +324,28 @@ bool deserialize(const std::string& str, Project& p) {
             if (st.valid) for (int i = 0; i < kMaxSteps; ++i) {
                 st.pitch[(size_t) i] = clampv<int8_t>(at(20 + 2 * (size_t) i), -96, 96);
                 st.rhythm[(size_t) i] = clampv<uint8_t>(at(21 + 2 * (size_t) i), 0, 99);
+            }
+        } else if (tag == "MTK" && v.size() >= 21) {
+            int s = at(0), pi = at(1), t = at(2);
+            if (s < 0 || s >= kNumSeqs || pi < 0 || pi >= kNumPatterns || t < 0 || t >= kNumMatTracks) continue;
+            auto& mt = p.seqs[(size_t) s].patterns[(size_t) pi].mat.tracks[(size_t) t];
+            mt.channel = clampv<uint8_t>(at(3), 0, 15); mt.baseNote = clampv<uint8_t>(at(4), 0, 127);
+            mt.rlen = clampv<uint8_t>(at(5), 0, 64); mt.muted = at(6) != 0;
+            mt.intMin = clampv<int8_t>(at(7), -24, 0); mt.intMax = clampv<int8_t>(at(8), 0, 24);
+            mt.eucLen = clampv<uint8_t>(at(9), 1, 16); mt.eucPulses = clampv<uint8_t>(at(10), 0, 16);
+            for (int l = 0; l < kNumMatLanes; ++l) mt.rnd[(size_t) l] = clampv<uint8_t>(at(11 + (size_t) l), 0, 100);
+        } else if (tag == "MLN" && v.size() >= 8 + 48) {
+            int s = at(0), pi = at(1), t = at(2), l = at(3);
+            if (s < 0 || s >= kNumSeqs || pi < 0 || pi >= kNumPatterns || t < 0 || t >= kNumMatTracks || l < 0 || l >= kNumMatLanes) continue;
+            auto& ln = p.seqs[(size_t) s].patterns[(size_t) pi].mat.tracks[(size_t) t].lanes[(size_t) l];
+            ln.start = clampv<uint8_t>(at(4), 0, 15); ln.end = clampv<uint8_t>(at(5), 0, 15);
+            if (ln.end < ln.start) ln.end = ln.start;
+            ln.div = clampv<Division>(at(6), 0, (int) Division::Count - 1);
+            ln.dir = clampv<Dir>(at(7), 0, (int) Dir::Count - 1);
+            for (int k = 0; k < 16; ++k) {
+                ln.val[(size_t) k] = clampv<int8_t>(at(8 + 3 * (size_t) k), matLaneMin(l), std::min(127, matLaneMax(l)));
+                ln.prob[(size_t) k] = clampv<uint8_t>(at(9 + 3 * (size_t) k), 0, 100);
+                ln.aux[(size_t) k] = clampv<uint8_t>(at(10 + 3 * (size_t) k), 0, 2);
             }
         } else if (tag == "PAT" && v.size() >= 3) {
             int s = at(0), pi = at(1);

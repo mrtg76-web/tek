@@ -303,6 +303,60 @@ static void testStochastic() {
     CHECK(p2->seqs[0].pat().stoch.valid && p2->seqs[0].pat().stoch.rhythm == sc.rhythm && p2->seqs[0].pat().stoch.octUp == 2);
 }
 
+static void testMatriceal() {
+    auto p = std::make_unique<Project>();
+    auto& q = p->seqs[0];
+    q.mode = Mode::Matr;
+    auto& mt = q.pat().mat.tracks[0];
+    auto& trig = mt.lanes[kLaneTrig];
+    for (int i : {0, 4, 8, 12}) trig.val[(size_t) i] = 1;
+    auto& note = mt.lanes[kLaneNote];
+    note.end = 2; note.val[0] = 0; note.val[1] = 2; note.val[2] = 4; // 3-step note lane against a 16-step trigger lane
+    Engine e(*p);
+    auto n = ons(run(e, 4.0));
+    CHECK(n.size() == 4);
+    if (n.size() == 4) { CHECK(n[0].note == 48); CHECK(n[1].note == 50); CHECK(n[2].note == 52); CHECK(n[3].note == 48);
+                         CHECK(std::fabs(n[1].ppq - 1.0) < 0.01); }
+
+    // pulses: step 0 held for 3 pulses (type All) -> 3 notes, lanes frozen meanwhile
+    auto p2 = std::make_unique<Project>();
+    auto& q2 = p2->seqs[0]; q2.mode = Mode::Matr;
+    auto& m2 = q2.pat().mat.tracks[0];
+    m2.lanes[kLaneTrig].val[0] = 1; m2.lanes[kLaneTrig].val[1] = 1;
+    m2.lanes[kLanePuls].val[0] = 3; m2.lanes[kLanePuls].aux[0] = 1;
+    Engine e2(*p2);
+    auto n2 = ons(run(e2, 1.0)); // 4 sixteenths: pulse, pulse, pulse, then step 1
+    CHECK(n2.size() == 4);
+    m2.lanes[kLanePuls].aux[0] = 0; // First: only the first pulse sounds
+    Engine e3(*p2);
+    CHECK(ons(run(e3, 1.0)).size() == 2);
+
+    // interval accumulator wraps between min and max; RLen restarts
+    auto p3 = std::make_unique<Project>();
+    auto& q3 = p3->seqs[0]; q3.mode = Mode::Matr;
+    auto& m3 = q3.pat().mat.tracks[0];
+    for (int i = 0; i < 16; ++i) m3.lanes[kLaneTrig].val[(size_t) i] = 1;
+    m3.lanes[kLaneIntv].val.fill(1); m3.intMin = 0; m3.intMax = 2;
+    Engine e4(*p3);
+    auto n4 = ons(run(e4, 1.5));
+    CHECK(n4.size() == 6);
+    if (n4.size() == 6) { CHECK(n4[0].note == 49); CHECK(n4[1].note == 50); CHECK(n4[2].note == 48); CHECK(n4[3].note == 49); }
+    m3.rlen = 2;
+    Engine e5(*p3);
+    auto n5 = ons(run(e5, 1.0));
+    if (n5.size() == 4) { CHECK(n5[0].note == 49); CHECK(n5[1].note == 50); CHECK(n5[2].note == 49); }
+
+    // serialization
+    auto s1 = serialize(*p);
+    auto pr = std::make_unique<Project>();
+    CHECK(deserialize(s1, *pr));
+    CHECK(pr->seqs[0].pat().mat.tracks[0].lanes[kLaneNote].end == 2 && pr->seqs[0].pat().mat.tracks[0].lanes[kLaneNote].val[2] == 4);
+    CHECK(serialize(*pr) == s1);
+
+    bool e16[16]; euclid(8, 3, 0, e16);
+    int cnt = 0; for (int i = 0; i < 8; ++i) cnt += e16[i]; CHECK(cnt == 3 && e16[0]);
+}
+
 int runControllerTests(); // defined in test_controller.cpp
 
 int main() {
@@ -318,6 +372,7 @@ int main() {
     testSerialization();
     testChords();
     testStochastic();
+    testMatriceal();
     failures += runControllerTests();
     if (failures == 0) std::printf("ALL TESTS PASSED\n");
     else std::printf("%d FAILURE(S)\n", failures);

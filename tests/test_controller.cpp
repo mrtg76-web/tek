@@ -196,5 +196,33 @@ int runControllerTests() {
         auto& t2 = r.p->seqs[1].pat().tracks[0];
         CCHECK(t2.steps[0].active && t2.steps[0].notes[0] == 7 && t2.steps[3].tie == 1 && t2.steps[3].notes[0] == 12);
     }
+    { // matriceal: 4 sections, lane pads, step editing
+        Rig r;
+        r.p->seqs[0].mode = Mode::Matr;
+        auto& mat = r.p->seqs[0].pat().mat;
+        r.tap(5, 0);                     // section 2 (track 2), step 2 -> trigger on
+        CCHECK(mat.tracks[1].lanes[kLaneTrig].val[1] == 1);
+        r.tap(5, 4);                     // track 2 lane pad row 4 col 1 = NOTE
+        r.c.padDown(5, 0, r.t); r.t += 600;
+        r.c.encoderTurn(0, 3, r.t);      // note +3
+        r.c.encoderTurn(1, -4, r.t);     // prob 80 %
+        r.c.padUp(5, 0, r.t); r.t += 400;
+        CCHECK(mat.tracks[1].lanes[kLaneNote].val[1] == 3 && mat.tracks[1].lanes[kLaneNote].prob[1] == 80);
+        r.tap(5, 0);                     // tap on a set note step resets it
+        CCHECK(mat.tracks[1].lanes[kLaneNote].val[1] == 0);
+        // lane settings: hold lane pad + knob 3/4
+        r.c.padDown(5, 4, r.t); r.t += 600; r.c.encoderTurn(2, -1, r.t); r.c.encoderTurn(3, 1, r.t); r.c.padUp(5, 4, r.t); r.t += 400;
+        CCHECK(mat.tracks[1].lanes[kLaneNote].div == Division::EighthT && mat.tracks[1].lanes[kLaneNote].dir == Dir::Reverse);
+        // euclid on the trigger lane of track 1
+        r.tap(0, 4);                     // track 1 trigger lane
+        r.c.padDown(0, 0, r.t); r.t += 600; r.c.encoderTurn(0, -8, r.t); r.c.encoderTurn(1, -1, r.t); r.c.padUp(0, 0, r.t); r.t += 400;
+        int cnt = 0; for (int i = 0; i < 16; ++i) cnt += mat.tracks[0].lanes[kLaneTrig].val[(size_t) i];
+        CCHECK(mat.tracks[0].lanes[kLaneTrig].end == 7 && cnt == 3);
+        // mute track 3 via its track pad
+        r.hold(Btn::Mute); r.tap(9, 7); r.release(Btn::Mute);
+        CCHECK(mat.tracks[2].muted);
+        Frame f; r.c.render(f, r.t);
+        CCHECK(f.line1.rfind("T", 0) == 0);
+    }
     return cfail;
 }

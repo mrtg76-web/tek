@@ -42,6 +42,7 @@ public:
     std::array<uint8_t, kNumSeqs> soloMask {};  // multitrack solo bits (not saved)
 
     // --- state for the UI (lock free) ---
+    int matLanePos(int seq, int track, int lane) const { return rt[(size_t) seq][(size_t) track].lanePos[(size_t) lane].load(std::memory_order_relaxed); }
     int playhead(int seq, int track) const { return rt[(size_t) seq][(size_t) track].playheadUi.load(std::memory_order_relaxed); }
     bool isRunning() const { return running.load(std::memory_order_relaxed); }
     double currentBpm() const { return bpmUi.load(std::memory_order_relaxed); }
@@ -60,6 +61,15 @@ private:
         int64_t resetBlock = -1;
         int pos = -1;              // last position (for random / drunk)
         bool lastTrig = true;      // last evaluated trig condition (for PRE)
+        // matriceal
+        double matActive = 0.0;    // elapsed ppq excluding pulse holds (drives the parameter lanes)
+        int matHold = 0;           // remaining held pulses
+        uint8_t matHoldType = 0;   // 0 first, 1 all, 2 tie
+        int matAccum = 0;          // interval accumulator
+        int64_t matTicks = 0;      // trigger steps + pulses since reset (RLen)
+        std::array<int64_t, kNumMatLanes> laneCnt {};
+        std::array<std::atomic<int>, kNumMatLanes> lanePos {};
+        int lastNote = -1, lastVel = 0; uint8_t lastCh = 0; double lastDur = 0.0;
         std::atomic<int> playheadUi { -1 };
     };
 
@@ -81,10 +91,12 @@ private:
     void emitNoteOff(std::vector<MidiOut>& out, int off, int ch, int note);
     uint32_t rand32() { rngState ^= rngState << 13; rngState ^= rngState >> 17; rngState ^= rngState << 5; return rngState; }
     float rand01() { return (float) (rand32() & 0xffffff) / (float) 0x1000000; }
-    int tracksFor(const Sequencer& q) const { return q.mode == Mode::Multi ? kNumTracks : 1; }
+    int tracksFor(const Sequencer& q) const { return q.mode == Mode::Multi ? kNumTracks : q.mode == Mode::Matr ? kNumMatTracks : 1; }
     bool evalTrig(const Step& st, TrackRt& r, int len);
     void regenStoch(Stochastic& sc, const Track& tr, int i, bool pitch, bool rhythm);
     void playStoch(int s, int pos, double grid, double L, double bpm, bool parity, int64_t counter);
+    void playMatriceal(int s, int t, double grid, double L, double bpm);
+    double trackStepLength(int s, int t) const;
 
     Project& proj;
     double sr = 44100.0;
