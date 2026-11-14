@@ -19,7 +19,7 @@ TEK, OXI ONE MKII kılavuzunu temel alan bir VST3/AU sequencer plugin'i. Ses ür
 - **Temizleme ve çıkış:** INIT veya END'e dokunmak loop'u temizler. BACK görünümden çıkar.
 
 **Arpeggiator** (ARP tuşu):
-- **Keyboard arp** (Mono, Multitrack, Stochastic, Matriceal ve Keyboard görünümü): ARP'a basınca arp menüsü ve klavye açılır. Type'ı seçip klavyede notaları basılı tut. Ableton çalarken notalar arpejlenir.
+- **Keyboard arp** (Mono, Multitrack, Stochastic, Matriceal ve Keyboard görünümü): ARP'a basınca arp menüsü ve klavye açılır. Type'ı seçip klavyede notaları basılı tut, notalar arpejlenir. Ableton durmuşken arp kendi saatiyle Ableton'ın temposunda çalar; Play'e basınca bar çizgisine kilitlenir.
 - **Sequencer arp** (Poly ve Chord, grid görünümündeyken): Her step'in notaları/akoru o step boyunca arpejlenir.
 - **Menü (PAGE ile 3 sayfa):**
   - Sayfa 1: **Type** (Up, Down, Up/Dn, 2Up2Dn, AltIn, AltOut, AltIO, Pinky, Thumb, Random, RndOnce, Order) / **OctV** (±7 oktav) / **Gate** / **Div**.

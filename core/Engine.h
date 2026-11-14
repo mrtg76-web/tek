@@ -128,6 +128,8 @@ private:
     bool wasPlaying = false;
     bool intPlaying = false;
     double intPpq = 0.0;
+    double freePpq = 0.0;          // free-running clock for the arpeggiators while the transport is stopped
+    void emitDue(double blockStart, double blockEnd, double ppqPerSample, int numSamples, std::vector<MidiOut>& out);
     double expectedPpq = -1.0;
     bool panicPending = false;
     std::array<int, kNumSeqs> pendingPat {};

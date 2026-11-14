@@ -516,6 +516,24 @@ static void testLiveArpLoop() {
     CHECK((arpRun(kArpThumb, 0, 16, 16, {60, 64, 67}, 1.0) == std::vector<int>{60, 64, 60, 67}));
     CHECK(arpRun(kArpUp, 0, 4, 1, {60, 64, 67}, 2.0).size() == 2);   // euclid 1 pulse in 4
 
+    // the keyboard arp also runs while the transport is stopped (free clock at the host tempo)
+    {
+        auto pa = std::make_unique<Project>();
+        pa->seqs[0].arp.type = kArpUp;
+        Engine ea(*pa); ea.prepare(48000);
+        ea.arpKey(0, 60, true); ea.arpKey(0, 64, true);
+        int ons = 0, bal = 0;
+        for (int b = 0; b < 100; ++b) {
+            std::vector<MidiIn> in; std::vector<MidiOut> out;
+            Transport tp; tp.playing = b >= 50; tp.ppq = (b - 50) * 512 * 2.0 / 48000; tp.bpm = 120;
+            if (b == 80) { ea.arpKey(0, 60, false); ea.arpKey(0, 64, false); }
+            ea.process(tp, 512, in, out);
+            for (auto& m : out) { if ((m.status & 0xf0) == 0x90) { ++ons; ++bal; } if ((m.status & 0xf0) == 0x80) --bal; }
+        }
+        CHECK(ons >= 6); // ~1 beat stopped + ~0.6 beat playing at 1/16
+        CHECK(bal == 0);
+    }
+
     // hold keeps released notes
     auto ph = std::make_unique<Project>();
     ph->seqs[0].arp.type = kArpUp; ph->seqs[0].arp.hold = true;

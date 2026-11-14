@@ -840,12 +840,16 @@ void Engine::process(const Transport& host, int numSamples, const std::vector<Mi
     const double blockEnd = tp.ppq + numSamples * ppqPerSample;
 
     if (!tp.playing) {
-        for (auto& a : arpRt) a.nextGrid = -1.0;
-        if (wasPlaying) stopAll(out, 0);
+        if (wasPlaying) { stopAll(out, 0); for (auto& a : arpRt) a.nextGrid = -1.0; }
         wasPlaying = false;
         expectedPpq = -1.0;
         for (int s = 0; s < kNumSeqs; ++s)
             if (pendingPat[(size_t) s] >= 0) { proj.seqs[(size_t) s].curPattern = (uint8_t) pendingPat[(size_t) s]; pendingPat[(size_t) s] = -1; }
+        // keyboard arps keep running on a free clock at the host tempo
+        const double fEnd = freePpq + numSamples * ppqPerSample;
+        runArps(freePpq, fEnd, tp.bpm);
+        emitDue(freePpq, fEnd, ppqPerSample, numSamples, out);
+        freePpq = fEnd;
         return;
     }
 
@@ -853,6 +857,11 @@ void Engine::process(const Transport& host, int numSamples, const std::vector<Mi
     bool jumped = expectedPpq >= 0.0 && std::fabs(tp.ppq - expectedPpq) > std::max(0.01, numSamples * ppqPerSample * 0.5);
     if (!wasPlaying || jumped) {
         if (jumped) stopAll(out, 0);
+        else { // leaving the free arp clock: release its notes and restart the arps on the timeline
+            for (auto& e : queue) if (e.kind == 1) emitNoteOff(out, 0, e.ch, e.d1);
+            queue.clear();
+            for (auto& a : arpRt) a.nextGrid = -1.0;
+        }
         startAll(tp.ppq);
     }
     wasPlaying = true;
@@ -900,7 +909,10 @@ void Engine::process(const Transport& host, int numSamples, const std::vector<Mi
     }
 
     runArps(tp.ppq, blockEnd, tp.bpm);
+    emitDue(tp.ppq, blockEnd, ppqPerSample, numSamples, out);
+}
 
+void Engine::emitDue(double blockStart, double blockEnd, double ppqPerSample, int numSamples, std::vector<MidiOut>& out) {
     // ---- emit due events
     due.clear();
     size_t w = 0;
@@ -914,7 +926,7 @@ void Engine::process(const Transport& host, int numSamples, const std::vector<Mi
         return (a.kind == 4 ? 2 : a.kind) > (b.kind == 4 ? 2 : b.kind); // note offs before note ons at the same time
     });
     for (auto& e : due) {
-        int off = (int) std::floor((e.ppq - tp.ppq) / ppqPerSample);
+        int off = (int) std::floor((e.ppq - blockStart) / ppqPerSample);
         off = std::clamp(off, 0, std::max(0, numSamples - 1));
         switch (e.kind) {
             case 0: emitNoteOn(out, off, e.ch, e.d1, e.d2); break;
