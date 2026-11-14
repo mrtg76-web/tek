@@ -1,6 +1,6 @@
 # TEK — 8 kanallı performans sequencer'ı (Faz 1–4 tamam: modlar, performans araçları, generator'lar, kayıt, modülasyon, arranger)
 
-TEK, OXI ONE MKII kılavuzunu temel alan bir VST3/AU sequencer plugin'i. Ses üretmiyor, MIDI üretiyor. Ableton'daki synth'leri, drum rack'leri ve harici cihazları sürüyor.
+TEK, 8 kanallı bir VST3/AU performans sequencer plugin'i. Ses üretmiyor, MIDI üretiyor. Ableton'daki synth'leri, drum rack'leri ve harici cihazları sürüyor.
 
 ## Faz 4b: Arranger ve drum generator (yeni)
 
