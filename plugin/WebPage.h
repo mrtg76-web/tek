@@ -149,32 +149,47 @@ static const char* kTekWebPage = R"TEK(<!DOCTYPE html>
     ws.onopen = () => { connected = true; setStatus(); };
     ws.onclose = () => { connected = false; setStatus(); releaseAll(); setTimeout(connect, 1000); };
     ws.onerror = () => { try { ws.close(); } catch (e) {} };
-    ws.onmessage = (ev) => draw(ev.data);
+    ws.onmessage = (ev) => { pending = ev.data; if (!raf) raf = requestAnimationFrame(flush); };
   }
   setStatus(); connect();
 
   const hex = (s) => '#' + s;
+  let pending = null, raf = 0;
+  function flush() { raf = 0; const t = pending; pending = null; if (t) draw(t); } // newest frame only, once per screen refresh
+  const prev = {};
+  const txt = (id, v) => { if (prev[id] !== v) { prev[id] = v; document.getElementById(id).textContent = v; } };
+  const padC = new Array(128).fill(''), ledC = new Array(37).fill(''), progC = new Array(16).fill('');
   function draw(t) {
     const f = t.split('\n');
     if (f[0] !== 'F') return;
-    document.getElementById('hdrL').textContent = f[1];
-    document.getElementById('hdrR').textContent = f[2];
-    document.getElementById('l1').textContent = f[3];
-    document.getElementById('l2').textContent = f[4];
-    for (let i = 0; i < 4; i++) { kvK[i].textContent = f[5 + i]; kvV[i].textContent = f[9 + i]; }
-    const m = document.getElementById('msg');
-    if (f[13]) { m.textContent = f[13]; m.style.display = 'block'; } else m.style.display = 'none';
+    txt('hdrL', f[1]); txt('hdrR', f[2]); txt('l1', f[3]); txt('l2', f[4]);
+    for (let i = 0; i < 4; i++) {
+      if (prev['k' + i] !== f[5 + i]) { prev['k' + i] = f[5 + i]; kvK[i].textContent = f[5 + i]; }
+      if (prev['v' + i] !== f[9 + i]) { prev['v' + i] = f[9 + i]; kvV[i].textContent = f[9 + i]; }
+    }
+    if (prev.msg !== f[13]) {
+      prev.msg = f[13];
+      const m = document.getElementById('msg');
+      if (f[13]) { m.textContent = f[13]; m.style.display = 'block'; } else m.style.display = 'none';
+    }
     const pr = parseInt(f[14] || '0', 10);
-    for (let i = 0; i < 16; i++) prog.children[i].style.background = i <= pr ? (i % 4 === 0 ? '#cfefff' : '#86a0ad') : '#1a2226';
+    for (let i = 0; i < 16; i++) {
+      const c = i <= pr ? (i % 4 === 0 ? '#cfefff' : '#86a0ad') : '#1a2226';
+      if (progC[i] !== c) { progC[i] = c; prog.children[i].style.background = c; }
+    }
     const ps = f[15] || '';
     for (let i = 0; i < 128; i++) {
       const c = ps.substr(i * 6, 6);
+      if (padC[i] === c) continue; // touch only pads that changed
+      padC[i] = c;
       pads[i].style.background = c === '000000' ? '#26282b' : hex(c);
       pads[i].style.boxShadow = c === '000000' ? 'none' : '0 0 10px ' + hex(c) + '55';
     }
     const ls = f[16] || '';
     for (let i = 0; i < 37; i++) {
       const c = ls.substr(i * 6, 6);
+      if (ledC[i] === c) continue;
+      ledC[i] = c;
       if (i >= 29) {
         const b = btnEls[i];
         b.style.background = c === '000000' ? '#2b2d30' : hex(c);

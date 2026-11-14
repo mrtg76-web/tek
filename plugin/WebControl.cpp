@@ -1,6 +1,14 @@
 #include "WebControl.h"
 #include "PluginProcessor.h"
 #include "WebPage.h"
+#if JUCE_WINDOWS
+ #include <winsock2.h>
+ #include <ws2tcpip.h>
+#else
+ #include <netinet/in.h>
+ #include <netinet/tcp.h>
+ #include <sys/socket.h>
+#endif
 
 namespace {
 
@@ -104,16 +112,22 @@ private:
         sendAll(*sock, utf8, len);
     }
 
-    bool sendText(const juce::String& t) {
+    bool sendText(const juce::String& t) { // header + payload in ONE write, so no packet waits behind Nagle / delayed ACK
         auto* u = t.toRawUTF8();
         const size_t n = strlen(u);
-        uint8_t h[10];
-        int hl = 0;
-        h[hl++] = 0x81;
-        if (n < 126) h[hl++] = (uint8_t) n;
-        else if (n < 65536) { h[hl++] = 126; h[hl++] = (uint8_t) (n >> 8); h[hl++] = (uint8_t) n; }
-        else { h[hl++] = 127; for (int i = 7; i >= 0; --i) h[hl++] = (uint8_t) ((uint64_t) n >> (8 * i)); }
-        return sendAll(*sock, h, hl) && sendAll(*sock, u, (int) n);
+        out.clear();
+        out.push_back(0x81);
+        if (n < 126) out.push_back((uint8_t) n);
+        else if (n < 65536) { out.push_back(126); out.push_back((uint8_t) (n >> 8)); out.push_back((uint8_t) n); }
+        else { out.push_back(127); for (int i = 7; i >= 0; --i) out.push_back((uint8_t) ((uint64_t) n >> (8 * i))); }
+        out.insert(out.end(), (const uint8_t*) u, (const uint8_t*) u + n);
+        return sendAll(*sock, out.data(), (int) out.size());
+    }
+    std::vector<uint8_t> out;
+
+    void noDelay() {
+        int one = 1;
+        setsockopt((decltype(sock->getRawSocketHandle())) sock->getRawSocketHandle(), IPPROTO_TCP, TCP_NODELAY, (const char*) &one, sizeof one);
     }
 
     void webSocket(const juce::String& key) {
@@ -121,12 +135,16 @@ private:
                           + WebControl::acceptKey(key) + "\r\n\r\n";
         if (!sendAll(*sock, resp.toRawUTF8(), (int) strlen(resp.toRawUTF8()))) return;
         ws = true;
+        noDelay();
         juce::String last;
-        double lastSend = 0.0;
+        double nextSend = 0.0;
         tek::Frame frame;
+        constexpr double kFrameMs = 16.0; // ~60 Hz, sent only when something changed
         while (!stop && !threadShouldExit()) {
-            // incoming frames
-            int ready = sock->waitUntilReady(true, 10);
+            // incoming frames; wait exactly until the next frame is due so frames go out evenly spaced
+            const double wnow = juce::Time::getMillisecondCounterHiRes();
+            const int waitMs = (int) juce::jlimit(0.0, kFrameMs, nextSend - wnow);
+            int ready = sock->waitUntilReady(true, waitMs);
             if (ready < 0) return;
             if (ready > 0) {
                 uint8_t h[2];
@@ -150,10 +168,10 @@ private:
                 if (op == 1) owner.handleMessage(juce::String::fromUTF8(payload.data(), (int) payload.size()));
                 continue; // drain input before rendering
             }
-            // outgoing frame (~30 Hz, only when it changed)
+            // outgoing frame
             const double now = juce::Time::getMillisecondCounterHiRes();
-            if (now - lastSend < 33.0) continue;
-            lastSend = now;
+            if (now < nextSend) continue;
+            nextSend = std::max(nextSend + kFrameMs, now);
             {
                 const juce::SpinLock::ScopedLockType sl(owner.proc.lock);
                 owner.proc.controller().render(frame, now);
