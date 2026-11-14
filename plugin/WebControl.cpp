@@ -166,7 +166,8 @@ private:
                     sendAll(*sock, pong.data(), (int) pong.size());
                 }
                 if (op == 1 && payload.size() > 2 && payload[0] == 'k' && payload[1] == ' ') { // keep-alive: echo right away
-                    if (!sendText("K " + juce::String::fromUTF8(payload.data() + 2, (int) payload.size() - 2))) return;
+                    if (!sendText("K " + juce::String::fromUTF8(payload.data() + 2, (int) payload.size() - 2) + " "
+                                  + juce::String(juce::Time::getMillisecondCounterHiRes(), 1))) return; // + server clock for sync
                     continue;
                 }
                 if (op == 1) owner.handleMessage(juce::String::fromUTF8(payload.data(), (int) payload.size()));
@@ -178,11 +179,33 @@ private:
             nextSend = juce::jmax(nextSend + kFrameMs, now);
             {
                 const juce::SpinLock::ScopedLockType sl(owner.proc.lock);
-                owner.proc.controller().render(frame, now);
+                auto& c = owner.proc.controller();
+                c.predict = true;
+                c.render(frame, now);
+                c.predict = false;
             }
-            juce::String t = WebControl::frameToText(&frame);
+            juce::String t = WebControl::frameToText(&frame) + predictionText(frame, now);
             if (t != last) { if (!sendText(t)) return; last = t; }
         }
+    }
+
+    // Timeline reference: server time (ms) at which ppq was 0. The engine's ppq is sampled per audio block, so it
+    // lags by up to a block; the smallest estimate is the most accurate. A jump (loop, relocate, tempo) resets it.
+    double refMs = 0.0, refBpm = 0.0;
+    juce::String predictionText(const tek::Frame& f, double now) {
+        if (!f.running || f.bpm <= 0.0) { refBpm = 0.0; return {}; }
+        const double msPerBeat = 60000.0 / f.bpm;
+        const double est = now - f.ppq * msPerBeat;
+        if (refBpm != f.bpm || est < refMs - 40.0 || est > refMs + 40.0) { refMs = est; refBpm = f.bpm; }
+        else refMs = juce::jmin(refMs, est);
+        juce::String t = "\nP " + juce::String(refMs, 1) + " " + juce::String(f.bpm, 3) + "\n";
+        for (int i = 0; i < f.nPred; ++i) {
+            const auto& p = f.pred[(size_t) i];
+            if (i) t << ";";
+            t << p.row << "," << p.idx << "," << p.start << "," << p.end << "," << p.page << ","
+              << juce::String(p.ppq, 4) << "," << juce::String(p.len, 4);
+        }
+        return t;
     }
 
     WebControl& owner;

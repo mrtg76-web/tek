@@ -2233,7 +2233,7 @@ void Controller::renderSteps(Frame& f, double nowMs) const {
                 if (y == 0 && above) c = 0x606060;
                 if (y == 7 && below) c = 0x701818;
             }
-            if (idx == ph && eng.isRunning()) c = c == 0 || c == 0x3b3e43 ? 0x5a5d63 : mix(c, 0xffffff, 0.45f);
+            if (idx == ph && eng.isRunning() && !((predMask >> trackIndex()) & 1)) c = c == 0 || c == 0x3b3e43 ? 0x5a5d63 : mix(c, 0xffffff, 0.45f);
             f.pads[(size_t) (y * 16 + x)] = c;
         }
     }
@@ -2291,7 +2291,7 @@ void Controller::renderLanes(Frame& f, double nowMs) const {
             if (tr.muted && st.active) c = dim(c, 0.3f);
             if (x == 0 && selT && !st.active) c = 0x8a7a10;
             if (idx == tr.end && selT && !st.active && inRange) c = 0x403a08;
-            if (idx == ph && eng.isRunning() && inRange) c = (c == 0 || c == 0x34373b) ? 0x55585e : mix(c, 0xffffff, 0.45f);
+            if (idx == ph && eng.isRunning() && inRange && !((predMask >> t) & 1)) c = (c == 0 || c == 0x34373b) ? 0x55585e : mix(c, 0xffffff, 0.45f);
             if (muteView && x == 0) c = tr.muted ? 0 : 0x2050ff;
             if (muteView && x == 15) c = (eng.soloMask[(size_t) sel] & (1u << t)) ? 0xffd000 : 0x202020;
             f.pads[(size_t) (y * 16 + x)] = c;
@@ -2348,6 +2348,26 @@ void Controller::render(Frame& f, double nowMs) const {
     if (follow && eng.isRunning() && grid != GridMode::Load && !hasKeys() && !isMatr() && !isStoch() && !isPlayer()) {
         int ph = eng.playhead(sel, trackIndex());
         if (ph >= 0) const_cast<Controller*>(this)->page[(size_t) sel] = ph / 16;
+    }
+
+    // ---- playhead prediction (remote displays animate forward playheads themselves between frames)
+    predMask = 0; f.nPred = 0;
+    f.running = eng.isRunning(); f.ppq = eng.currentPpq(); f.bpm = eng.currentBpm();
+    const bool stepGrid = grid == GridMode::Steps && !isStoch() && !isMatr() && !hasKeys() && !isPlayer();
+    if (predict && f.running && stepGrid) {
+        const int pg = page[(size_t) sel];
+        auto addRow = [&](int t, int row) {
+            const auto& tr = seq().pat().tracks[(size_t) t];
+            const double len = eng.playheadLen(sel, t);
+            const int ph = eng.playhead(sel, t);
+            if (tr.dir != Dir::Forward || len <= 0.0 || ph < 0) return;
+            const int rs = tr.hasLoop() ? tr.loopStart : tr.start, re = tr.hasLoop() ? tr.loopEnd : tr.end;
+            if (ph < rs || ph > re) return;
+            f.pred[(size_t) f.nPred++] = {row, ph, rs, re, pg, eng.playheadPpq(sel, t), len};
+            predMask |= (uint8_t) (1u << t);
+        };
+        if (lanesView()) for (int t = 0; t < kNumTracks; ++t) addRow(t, 7 - t);
+        else addRow(trackIndex(), -1);
     }
 
     if (grid == GridMode::Keys) renderKeys(f);

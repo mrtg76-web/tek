@@ -60,6 +60,8 @@ public:
     int dominoNotePos(int seq) const { return rt[(size_t) seq][0].domNoteUi.load(std::memory_order_relaxed); }
     int matLanePos(int seq, int track, int lane) const { return rt[(size_t) seq][(size_t) track].lanePos[(size_t) lane].load(std::memory_order_relaxed); }
     int playhead(int seq, int track) const { return rt[(size_t) seq][(size_t) track].playheadUi.load(std::memory_order_relaxed); }
+    double playheadPpq(int seq, int track) const { return rt[(size_t) seq][(size_t) track].phPpq.load(std::memory_order_relaxed); }
+    double playheadLen(int seq, int track) const { return rt[(size_t) seq][(size_t) track].phLen.load(std::memory_order_relaxed); }
     bool isRunning() const { return running.load(std::memory_order_relaxed); }
     double currentBpm() const { return bpmUi.load(std::memory_order_relaxed); }
     double currentPpq() const { return ppqUi.load(std::memory_order_relaxed); }
@@ -92,6 +94,7 @@ private:
         std::array<int8_t, kMaxSteps> accVal {};   // accumulator value per step
         std::array<int8_t, kMaxSteps> accDir {};   // pendulum direction per step
         std::atomic<int> playheadUi { -1 };
+        std::atomic<double> phPpq { 0.0 }, phLen { 0.0 }; // start and length of the step under the playhead (UI prediction)
     };
 
     struct Ev {

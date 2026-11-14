@@ -234,7 +234,8 @@ void Engine::scheduleStep(int s, int t, double grid, double L, double bpm) {
     r.pos = pos;
     if (q.perfRot != 0 && len > 0 && q.mode != Mode::Multi) pos = rs + (((pos - rs - q.perfRot) % len) + len) % len; // perform rotate
 
-    push({grid, 2, 0, 0, 0, (uint8_t) s, (uint8_t) t, (int16_t) pos});
+    { const uint32_t Lq = (uint32_t) std::clamp(std::lround(L * 960.0), 0L, 0xffffffL); // step length rides in ch/d1/d2
+      push({grid, 2, (uint8_t) (Lq & 255), (uint8_t) ((Lq >> 8) & 255), (uint8_t) (Lq >> 16), (uint8_t) s, (uint8_t) t, (int16_t) pos}); }
 
     const Step& st = tr.steps[(size_t) pos];
     const bool parity = (r.nextIdx % 2) != 0; // nextIdx already refers to this step here
@@ -972,7 +973,13 @@ void Engine::emitDue(double blockStart, double blockEnd, double ppqPerSample, in
         switch (e.kind) {
             case 0: emitNoteOn(out, off, e.ch, e.d1, e.d2); break;
             case 1: emitNoteOff(out, off, e.ch, e.d1); break;
-            case 2: rt[e.seq][e.track].playheadUi.store(e.pos, std::memory_order_relaxed); break;
+            case 2: {
+                auto& r = rt[e.seq][e.track];
+                r.phPpq.store(e.ppq, std::memory_order_relaxed);
+                r.phLen.store((double) (e.ch | (uint32_t) e.d1 << 8 | (uint32_t) e.d2 << 16) / 960.0, std::memory_order_relaxed);
+                r.playheadUi.store(e.pos, std::memory_order_relaxed);
+                break;
+            }
             case 4: rt[e.seq][0].domNoteUi.store(e.pos, std::memory_order_relaxed); break;
             default: out.push_back({off, e.ch, e.d1, e.d2}); break;
         }

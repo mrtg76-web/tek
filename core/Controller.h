@@ -25,6 +25,12 @@ struct Frame {
     std::array<std::string, 4> labels, values;
     std::string message;                    // transient popup
     int progress = 0;                       // bar progress 0..15 (16ths in the bar)
+    // playhead prediction for remote displays (filled only when Controller::predict is on)
+    struct Pred { int row, idx, start, end, page; double ppq, len; };
+    std::array<Pred, 8> pred {};
+    int nPred = 0;
+    double ppq = 0.0, bpm = 120.0;
+    bool running = false;
 };
 
 class Controller {
@@ -39,6 +45,7 @@ public:
     void encoderPress(int knob, bool down, double nowMs);
 
     void render(Frame& f, double nowMs) const;
+    bool predict = false; // render(): leave forward playheads out of the pads and describe them in Frame::pred
 
     int selectedSeq() const { return sel; }
     void resetUiState();          // call after loading a project
@@ -207,6 +214,7 @@ private:
     std::vector<KeyHeld> keyHeld;
     double keyboardDownMs = 0.0;
     int midiLoadSeq = 0;
+    mutable uint8_t predMask = 0;  // tracks whose playhead is predicted instead of drawn
     double randDownMs = 0.0, perfDownMs = 0.0;
     // perform view state
     struct PerfHeld { int x, y; bool latched; };

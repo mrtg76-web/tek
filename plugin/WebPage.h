@@ -136,7 +136,7 @@ static const char* kTekWebPage = R"TEK(<!DOCTYPE html>
   }
   window.addEventListener('resize', fit); fit();
 
-  // ---------------------------------------------------------------- connection
+)TEK" R"TEK(  // ---------------------------------------------------------------- connection
   let ws = null, connected = false;
   const url = location.host;
   let rtt = -1, worst = 0, worstAt = 0;
@@ -148,10 +148,18 @@ static const char* kTekWebPage = R"TEK(<!DOCTYPE html>
   // keep-alive: small upstream packets keep the Wi-Fi radios awake and measure the round trip
   setInterval(() => send('k ' + Math.round(performance.now())), 100);
   setInterval(() => { if (performance.now() - worstAt > 10000) worst = rtt; setStatus(); }, 1000);
+  // clock sync: offset = server clock - local clock, taken from the fastest recent round trip
+  let offset = null; const syncs = [];
   function pong(t) {
-    const now = performance.now();
-    rtt = now - parseInt(t, 10);
+    const now = performance.now(), a = t.split(' '), sent = parseFloat(a[0]);
+    rtt = now - sent;
     if (rtt >= worst) { worst = rtt; worstAt = now; }
+    if (a.length > 1) {
+      syncs.push([rtt, parseFloat(a[1]) - (sent + rtt / 2)]);
+      if (syncs.length > 50) syncs.shift();
+      let b = syncs[0]; for (const x of syncs) if (x[0] < b[0]) b = x;
+      offset = b[1];
+    }
   }
   function send(m) { if (ws && ws.readyState === 1) ws.send(m); }
   function connect() {
@@ -169,6 +177,43 @@ static const char* kTekWebPage = R"TEK(<!DOCTYPE html>
   const prev = {};
   const txt = (id, v) => { if (prev[id] !== v) { prev[id] = v; document.getElementById(id).textContent = v; } };
   const padC = new Array(128).fill(''), ledC = new Array(37).fill(''), progC = new Array(16).fill('');
+  let base = '', baseProg = 0, pred = null, animating = false;
+  const lit = (c) => {
+    if (c === '000000' || c === '3b3e43' || c === '34373b') return '5a5d63';
+    let o = ''; for (let k = 0; k < 3; k++) { const v = parseInt(c.substr(k * 2, 2), 16); o += Math.round(v + (255 - v) * 0.45).toString(16).padStart(2, '0'); }
+    return o;
+  };
+  function paint() { // base pads + predicted playheads, progress bar from the synced clock
+    const now = performance.now();
+    const cols = new Array(128);
+    for (let i = 0; i < 128; i++) cols[i] = base.substr(i * 6, 6);
+    let pr = baseProg;
+    if (pred && offset !== null) {
+      const mpb = 60000 / pred.bpm, ref = pred.ref - offset;
+      pr = Math.floor((((now - ref) / mpb) % 4 + 4) % 4 * 4);
+      for (const r of pred.rows) {
+        const lenMs = r.len * mpb;
+        const n = Math.max(0, Math.min(32, Math.floor((now - (ref + r.ppq * mpb)) / lenMs)));
+        const span = r.end - r.start + 1;
+        const idx = r.start + (r.idx - r.start + n) % span;
+        if (Math.floor(idx / 16) !== r.page) continue;
+        const x = idx % 16;
+        for (let y = (r.row < 0 ? 0 : r.row); y <= (r.row < 0 ? 7 : r.row); y++) cols[y * 16 + x] = lit(cols[y * 16 + x]);
+      }
+    }
+    for (let i = 0; i < 16; i++) {
+      const c = i <= pr ? (i % 4 === 0 ? '#cfefff' : '#86a0ad') : '#1a2226';
+      if (progC[i] !== c) { progC[i] = c; prog.children[i].style.background = c; }
+    }
+    for (let i = 0; i < 128; i++) {
+      const c = cols[i];
+      if (padC[i] === c) continue; // touch only pads that changed
+      padC[i] = c;
+      pads[i].style.background = c === '000000' ? '#26282b' : hex(c);
+      pads[i].style.boxShadow = c === '000000' ? 'none' : '0 0 10px ' + hex(c) + '55';
+    }
+  }
+  function tick() { if (!pred) { animating = false; return; } paint(); requestAnimationFrame(tick); }
   function draw(t) {
     const f = t.split('\n');
     if (f[0] !== 'F') return;
@@ -182,19 +227,19 @@ static const char* kTekWebPage = R"TEK(<!DOCTYPE html>
       const m = document.getElementById('msg');
       if (f[13]) { m.textContent = f[13]; m.style.display = 'block'; } else m.style.display = 'none';
     }
-    const pr = parseInt(f[14] || '0', 10);
-    for (let i = 0; i < 16; i++) {
-      const c = i <= pr ? (i % 4 === 0 ? '#cfefff' : '#86a0ad') : '#1a2226';
-      if (progC[i] !== c) { progC[i] = c; prog.children[i].style.background = c; }
+    baseProg = parseInt(f[14] || '0', 10);
+    base = f[15] || '';
+    pred = null;
+    if (f[17] && f[17].charAt(0) === 'P') {
+      const p = f[17].split(' ');
+      pred = { ref: parseFloat(p[1]), bpm: parseFloat(p[2]), rows: [] };
+      if (f[18]) for (const e of f[18].split(';')) {
+        const v = e.split(',').map(Number);
+        if (v.length === 7 && v[6] > 0) pred.rows.push({ row: v[0], idx: v[1], start: v[2], end: v[3], page: v[4], ppq: v[5], len: v[6] });
+      }
     }
-    const ps = f[15] || '';
-    for (let i = 0; i < 128; i++) {
-      const c = ps.substr(i * 6, 6);
-      if (padC[i] === c) continue; // touch only pads that changed
-      padC[i] = c;
-      pads[i].style.background = c === '000000' ? '#26282b' : hex(c);
-      pads[i].style.boxShadow = c === '000000' ? 'none' : '0 0 10px ' + hex(c) + '55';
-    }
+    paint();
+    if (pred && !animating) { animating = true; requestAnimationFrame(tick); }
     const ls = f[16] || '';
     for (let i = 0; i < 37; i++) {
       const c = ls.substr(i * 6, 6);
