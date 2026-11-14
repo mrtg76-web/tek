@@ -50,11 +50,13 @@ void TekProcessor::processBlock(juce::AudioBuffer<float>& audio, juce::MidiBuffe
         }
     }
 
+    const double nowMs = juce::Time::getMillisecondCounterHiRes();
     midiIn.clear();
     for (const auto meta : midi) {
         auto m = meta.getMessage();
         if (m.getRawDataSize() >= 3) {
             auto* d = m.getRawData();
+            if (isEcho(d[0], d[1], d[2], nowMs)) continue;
             midiIn.push_back({d[0], d[1], d[2]});
         }
     }
@@ -73,10 +75,27 @@ void TekProcessor::processBlock(juce::AudioBuffer<float>& audio, juce::MidiBuffe
     for (auto& e : midiOut) {
         juce::MidiMessage m(e.status, e.data1, e.data2);
         if (toHost) midi.addEvent(m, e.sampleOffset);
-        if (toPort) portBuffer.addEvent(m, e.sampleOffset);
+        if (toPort) {
+            portBuffer.addEvent(m, e.sampleOffset);
+            echoes[(size_t) echoHead] = {e.status, e.data1, e.data2, nowMs};
+            echoHead = (echoHead + 1) % (int) echoes.size();
+        }
     }
     if (toPort && !portBuffer.isEmpty())
         virtualOut->sendBlockOfMessages(portBuffer, juce::Time::getMillisecondCounterHiRes(), sampleRate);
+}
+
+bool TekProcessor::isEcho(uint8_t st, uint8_t d1, uint8_t d2, double nowMs) {
+    // note off may arrive as note on with velocity 0
+    auto norm = [](uint8_t& s, uint8_t& v) { if ((s & 0xF0) == 0x90 && v == 0) { s = (uint8_t) (0x80 | (s & 15)); } if ((s & 0xF0) == 0x80) v = 0; };
+    norm(st, d2);
+    for (auto& e : echoes) {
+        if (e.ms <= 0.0 || nowMs - e.ms > 500.0) continue;
+        uint8_t es = e.st, ed2 = e.d2;
+        norm(es, ed2);
+        if (es == st && e.d1 == d1 && ed2 == d2) { e.ms = 0.0; return true; }
+    }
+    return false;
 }
 
 juce::AudioProcessorEditor* TekProcessor::createEditor() { return new TekEditor(*this); }

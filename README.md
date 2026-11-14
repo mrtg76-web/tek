@@ -204,7 +204,8 @@ Sonraki fazlarda gelecekler: Chord, Stochastic, Matriceal, Domino, Saga ve MIDI 
    - Varsayılan olarak sequencer N, MIDI kanalı N'den çıkıyor. Bunu Shift + sequencer tuşu ile açılan Setup menüsünden değiştirebilirsin.
 3. **Tek synth için daha basit yol:** synth track'inde *MIDI From* = TEK'in olduğu track, alttaki seçici = **TEK**. Bu yolda bütün kanallar aynı synth'e gider, çünkü Ableton plugin çıkışını kanallara ayıramıyor.
 4. Çıkış yolu Setup sayfa 1 > **Out** ayarından seçiliyor: HOST, PORT veya BOTH (varsayılan BOTH).
-5. Sanal port üzerinden giden notalar ses kartı tamponu kadar gecikmeli gelebilir. Fark edersen Shift + MUTE (nudge) menüsünden ilgili sequencer'a eksi ms ver.
+5. **Öneri:** TEK'in kendi track'inde *MIDI From* ayarını **All Ins** yerine **No Input** ya da kullandığın MIDI klavye yap. TEK, TEK Out'tan geri gelen kendi notalarını artık filtreliyor, ama bu ayar en temiz çözüm.
+6. Sanal port üzerinden giden notalar ses kartı tamponu kadar gecikmeli gelebilir. Fark edersen Shift + MUTE (nudge) menüsünden ilgili sequencer'a eksi ms ver.
 
 ## Kontroller
 

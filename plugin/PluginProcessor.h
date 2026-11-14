@@ -52,6 +52,12 @@ private:
     std::vector<tek::MidiIn> midiIn;
     std::vector<tek::MidiOut> midiOut;
     juce::MidiBuffer portBuffer;
+    // Echo filter: events we sent to the "TEK Out" port can come straight back in when TEK's own track
+    // listens to "All Ins". Those are ignored so they don't re-trigger (which made notes hang).
+    struct Echo { uint8_t st, d1, d2; double ms; };
+    std::array<Echo, 1024> echoes {};
+    int echoHead = 0;
+    bool isEcho(uint8_t st, uint8_t d1, uint8_t d2, double nowMs);
     double sampleRate = 44100.0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(TekProcessor)
