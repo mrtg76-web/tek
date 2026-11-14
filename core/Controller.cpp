@@ -1938,6 +1938,7 @@ std::string Controller::rangeText(uint8_t Step::*field) const {
 }
 
 void Controller::editHeldSteps(int knob, int delta, double nowMs) {
+    const int fast = accelerated(knob, delta, nowMs); // velocity / gate: quick turns take bigger steps
     auto idxs = heldStepIndices();
     if (idxs.empty()) return;
     pushUndo();
@@ -1948,14 +1949,14 @@ void Controller::editHeldSteps(int knob, int delta, double nowMs) {
         auto& st = tr.steps[(size_t) idx];
         if (stepPage == 0) {
             switch (knob) {
-                case 0: st.velocity = clampT<uint8_t>(st.velocity + delta, 1, 127); shown = "Vel " + std::to_string(st.velocity); break;
+                case 0: st.velocity = clampT<uint8_t>(st.velocity + fast, 1, 127); shown = "Vel " + std::to_string(st.velocity); break;
                 case 1:
                     if (isMulti()) { for (int n = 0; n < st.numNotes; ++n) st.notes[(size_t) n] = clampT<int8_t>(st.notes[(size_t) n] + delta, -60, 60);
                         if (!st.numNotes) placeNote(tr, idx, 0);
                         shown = "Note " + noteName(tr.baseNote + degreeToSemis(seq().scale, st.notes[0])); }
                     else { st.octave = clampT<int8_t>(st.octave + delta, -4, 4); shown = "Oct " + std::to_string(st.octave); }
                     break;
-                case 2: st.gate = clampT<uint8_t>(st.gate + delta, 2, kGateLegato); shown = st.gate >= kGateLegato ? "Gate LEG" : "Gate " + std::to_string(st.gate); break;
+                case 2: st.gate = clampT<uint8_t>(st.gate + fast, 2, kGateLegato); shown = st.gate >= kGateLegato ? "Gate LEG" : "Gate " + std::to_string(st.gate); break;
                 case 3: st.trig = trigFromListIndex(trigToListIndex(st.trig) + delta); shown = "Trig " + trigLabel(st.trig); break;
             }
         } else if (stepPage == 1) {
@@ -1990,10 +1991,18 @@ void Controller::editHeldSteps(int knob, int delta, double nowMs) {
     (void) shown;
 }
 
+// Encoder acceleration for continuous values: a knob turned quickly moves in bigger steps, a slow turn stays at 1.
+int Controller::accelerated(int knob, int delta, double nowMs) {
+    const double dt = nowMs - lastTurnMs[(size_t) knob];
+    lastTurnMs[(size_t) knob] = nowMs;
+    const int m = dt < 30.0 ? 6 : dt < 60.0 ? 4 : dt < 110.0 ? 2 : 1;
+    return delta * m;
+}
+
 void Controller::editGlobal(int knob, int delta, double nowMs) {
     if (isMatr()) { (void) knob; (void) delta; msg("HOLD A STEP, LANE OR TRACK PAD", nowMs); return; }
     switch (knob) {
-        case 0: relative(&Step::velocity, delta, 1, 127, "Vel", nowMs); break;
+        case 0: relative(&Step::velocity, accelerated(knob, delta, nowMs), 1, 127, "Vel", nowMs); break;
         case 1:
             if (lanesView()) { // shift every note of the selected track by scale degrees
                 pushUndo();
@@ -2007,7 +2016,7 @@ void Controller::editGlobal(int knob, int delta, double nowMs) {
                 msg("OCTAVE " + noteName(seq().baseMidi()), nowMs);
             }
             break;
-        case 2: relative(&Step::gate, delta, 2, kGateLegato, "Gate", nowMs); break;
+        case 2: relative(&Step::gate, accelerated(knob, delta, nowMs), 2, kGateLegato, "Gate", nowMs); break;
         case 3:
             if (isStoch()) { msg("MOD LANE: PHASE 4", nowMs); break; }
             if (grid == GridMode::Column && columnParam == 2) relative(&Step::retrig, delta, 1, 8, "Retrig", nowMs);

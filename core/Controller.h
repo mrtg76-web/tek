@@ -178,6 +178,8 @@ private:
     std::unique_ptr<Pattern> stochToPattern() const;
     void editHeldSteps(int knob, int delta, double nowMs);
     void editGlobal(int knob, int delta, double nowMs);
+    int accelerated(int knob, int delta, double nowMs);
+    std::array<double, 4> lastTurnMs {};
     void editShift(int knob, int delta, double nowMs);
     void editMenu(int knob, int delta, double nowMs);
     void tapKnob(int knob, double nowMs);
