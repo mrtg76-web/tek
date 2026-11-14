@@ -2018,7 +2018,7 @@ void Controller::editGlobal(int knob, int delta, double nowMs) {
             break;
         case 2: relative(&Step::gate, accelerated(knob, delta, nowMs), 2, kGateLegato, "Gate", nowMs); break;
         case 3:
-            if (isStoch()) { msg("MOD LANE: PHASE 4", nowMs); break; }
+            if (isStoch()) { msg("TAP KNOB 4: MOD LANES", nowMs); break; }
             if (grid == GridMode::Column && columnParam == 2) relative(&Step::retrig, delta, 1, 8, "Retrig", nowMs);
             else relative(&Step::repeats, delta, 1, 15, "Repeat", nowMs);
             break;
@@ -2303,7 +2303,7 @@ void Controller::tapKnob(int knob, double nowMs) {
         else { scrollMode = !scrollMode; msg(scrollMode ? "KNOB 2: SCROLL" : "KNOB 2: OCTAVE", nowMs); }
         return;
     }
-    if (isStoch() && knob == 3) { msg("MOD LANE: PHASE 4", nowMs); return; }
+    if (isStoch() && knob == 3) { grid = GridMode::Mod; menu = Menu::None; modSettings = false; return; } // stochastic: knob 4 = mod lanes
     if (isMatr()) { msg("HOLD A STEP, LANE OR TRACK PAD", nowMs); return; }
     int param = knob == 0 ? 0 : knob == 2 ? 1 : 2;
     if (grid == GridMode::Column && columnParam == param) grid = GridMode::Steps;
@@ -2780,7 +2780,7 @@ void Controller::renderDisplay(Frame& f, double nowMs) const {
         } else if (menuPage == 1) {
             std::string tr2 = q.transpose == 0 ? "OFF" : q.transpose == 1 ? "Same" : "Ch" + std::to_string(q.transpose - 1);
             set("In", punchInLabel(q.punchIn), "Reset", onoff(q.resetBars), "Bnk", onoff(q.bank), "Trnsp", tr2);
-            f.line2 = "In/Bnk/PC: stored, used in phase 3";
+            f.line2 = "In = pattern switch timing";
         } else {
             std::string a = q.mode == Mode::Poly ? std::to_string(q.nVoices) : isMulti() ? (tr.swing == 0 ? "Same" : std::to_string(tr.swing)) : "-";
             bool mx = q.mode == Mode::Poly || q.mode == Mode::Chord || hasKeys();
