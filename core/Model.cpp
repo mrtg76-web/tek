@@ -130,6 +130,8 @@ void Project::reset() {
     bpm = 120.0;
     internalClock = false;
     output = OutputMode::Both;
+    scaleMaster = -1;
+    recQt = true; recQtPct = 100; recOvdb = true; recMode = 0; recCountIn = 0; metroCh = 0; metroMode = 0;
 }
 
 std::string chMxLabel(int v) {
@@ -224,11 +226,23 @@ static bool stepIsDefault(const Step& s) {
         && s.accAmt == 0 && s.accMode == 0 && s.accMax == 7 && s.accMin == 0 && s.accTarget == 0 && s.accPctMode == 0 && s.accProb == 100;
 }
 
-std::string serialize(const Project& p) {
+const char* genLogicLabel(int v) { static const char* l[] = {"OR", "AND", "XOR", "Accnt"}; return l[v & 3]; }
+const char* genOrderLabel(int v) { static const char* l[] = {"Lin", "Rnd", "PingP", "Shuf"}; return l[v & 3]; }
+const char* genLockLabel(int v) { static const char* l[] = {"OFF", "Pitch", "Rhythm", "Both"}; return l[v & 3]; }
+std::string randDenLabel(int v) {
+    if (v >= 1) return std::to_string(v) + "%";
+    static const char* l[] = {"Human", "Order", "Pitch", "Flip"};
+    return l[std::min(3, -v)];
+}
+
+std::string serialize(const Project& p, int onlySeq, int onlyPattern) {
     std::ostringstream o;
     o << "TEK 1\n";
-    o << "PRJ " << (int) (p.bpm * 10.0 + 0.5) << ' ' << (int) p.internalClock << ' ' << (int) p.output << '\n';
+    o << "PRJ " << (int) (p.bpm * 10.0 + 0.5) << ' ' << (int) p.internalClock << ' ' << (int) p.output << ' ' << (int) p.scaleMaster << '\n';
+    o << "REC " << (int) p.recQt << ' ' << (int) p.recQtPct << ' ' << (int) p.recOvdb << ' ' << (int) p.recMode << ' ' << (int) p.recCountIn
+      << ' ' << (int) p.metroCh << ' ' << (int) p.metroMode << '\n';
     for (int s = 0; s < kNumSeqs; ++s) {
+        if (onlySeq >= 0 && s != onlySeq) continue;
         const auto& q = p.seqs[(size_t) s];
         o << "SEQ " << s << ' ' << (int) q.mode << ' ' << (int) q.channel << ' ' << (int) q.scale << ' ' << (int) q.rootPc << ' '
           << (int) q.baseOctave << ' ' << (int) q.punchIn << ' ' << (int) q.resetBars << ' ' << (int) q.programChange << ' '
@@ -244,8 +258,18 @@ std::string serialize(const Project& p) {
         }
         o << "RPF " << s << ' ' << (int) q.rpVel << ' ' << (int) q.rpOct << ' ' << (int) q.rpGate << ' ' << (int) q.rpNote << ' ' << (int) q.rpRetri << ' '
           << (int) q.rpRept << ' ' << (int) q.rpTrig << ' ' << (int) q.rpScope << ' ' << (int) q.rpMask << ' ' << (int) q.perfTrans << ' ' << (int) q.perfRot << '\n';
+        {
+            const auto& g = q.gen;
+            o << "GEN " << s << ' ' << (int) g.eLen << ' ' << (int) g.ePuls << ' ' << (int) g.eRot << ' ' << (int) g.dens << ' ' << (int) g.nteR << ' '
+              << (int) g.ntePct << ' ' << (int) g.octR << ' ' << (int) g.eInv << ' ' << (int) g.tiePct << ' ' << (int) g.eLen2 << ' ' << (int) g.eRot2 << ' '
+              << (int) g.ntOrd << ' ' << (int) g.lock << ' ' << (int) g.ePuls2 << ' ' << (int) g.logic << ' ' << (int) g.velPct << '\n';
+            const auto& r = q.rgen;
+            o << "RGN " << s << ' ' << (int) r.bias << ' ' << (int) r.rang << ' ' << (int) r.rand << ' ' << (int) r.den << ' ' << (int) r.scal << ' '
+              << (int) r.vg << ' ' << (int) r.ties << '\n';
+        }
         o << "SQ2 " << s << ' ' << (int) q.bassMode << ' ' << (int) q.chMx << ' ' << (int) q.voice << ' ' << (int) q.harm << '\n';
         for (int pi = 0; pi < kNumPatterns; ++pi) {
+            if (onlyPattern >= 0 && pi != onlyPattern) continue;
             const auto& pat = q.patterns[(size_t) pi];
             o << "PAT " << s << ' ' << pi << ' ' << (int) pat.swing << '\n';
             if (!pat.clip.notes.empty()) {
@@ -343,6 +367,25 @@ bool deserialize(const std::string& str, Project& p) {
             p.bpm = at(0) / 10.0; if (p.bpm < 20) p.bpm = 20; if (p.bpm > 300) p.bpm = 300;
             p.internalClock = at(1) != 0;
             p.output = clampv<OutputMode>(at(2), 0, (int) OutputMode::Count - 1);
+            if (v.size() >= 4) p.scaleMaster = clampv<int8_t>(at(3), -1, kNumSeqs - 1);
+        } else if (tag == "REC" && v.size() >= 7) {
+            p.recQt = at(0) != 0; p.recQtPct = clampv<uint8_t>(at(1), 0, 100); p.recOvdb = at(2) != 0;
+            p.recMode = clampv<uint8_t>(at(3), 0, 2); p.recCountIn = clampv<uint8_t>(at(4), 0, 4);
+            p.metroCh = clampv<uint8_t>(at(5), 0, 16); p.metroMode = clampv<uint8_t>(at(6), 0, 1);
+        } else if (tag == "GEN" && v.size() >= 17) {
+            int s = at(0); if (s < 0 || s >= kNumSeqs) continue;
+            auto& g = p.seqs[(size_t) s].gen;
+            g.eLen = clampv<uint8_t>(at(1), 1, kMaxSteps); g.ePuls = clampv<uint8_t>(at(2), 0, kMaxSteps); g.eRot = clampv<int8_t>(at(3), -64, 64);
+            g.dens = clampv<int8_t>(at(4), -100, 100); g.nteR = clampv<int8_t>(at(5), -24, 24); g.ntePct = clampv<uint8_t>(at(6), 0, 100);
+            g.octR = clampv<int8_t>(at(7), -3, 3); g.eInv = at(8) != 0; g.tiePct = clampv<uint8_t>(at(9), 0, 100);
+            g.eLen2 = clampv<uint8_t>(at(10), 0, kMaxSteps); g.eRot2 = clampv<int8_t>(at(11), -64, 64); g.ntOrd = clampv<uint8_t>(at(12), 0, 3);
+            g.lock = clampv<uint8_t>(at(13), 0, 3); g.ePuls2 = clampv<uint8_t>(at(14), 0, kMaxSteps); g.logic = clampv<uint8_t>(at(15), 0, 3);
+            g.velPct = clampv<uint8_t>(at(16), 0, 100);
+        } else if (tag == "RGN" && v.size() >= 8) {
+            int s = at(0); if (s < 0 || s >= kNumSeqs) continue;
+            auto& r = p.seqs[(size_t) s].rgen;
+            r.bias = clampv<int8_t>(at(1), -10, 10); r.rang = clampv<int8_t>(at(2), -24, 24); r.rand = clampv<uint8_t>(at(3), 0, 100);
+            r.den = clampv<int8_t>(at(4), -3, 100); r.scal = at(5) != 0; r.vg = clampv<uint8_t>(at(6), 0, 100); r.ties = clampv<uint8_t>(at(7), 0, 100);
         } else if (tag == "SEQ" && v.size() >= 24) {
             int s = at(0); if (s < 0 || s >= kNumSeqs) continue;
             auto& q = p.seqs[(size_t) s];

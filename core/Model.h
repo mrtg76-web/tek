@@ -211,6 +211,24 @@ struct ArpSettings {
     bool latch = false, hold = false;
 };
 
+// Euclidean pattern generator settings (manual 4.10)
+struct GenSettings {
+    uint8_t eLen = 16, ePuls = 4; int8_t eRot = 0; int8_t dens = 0;      // dens -100..100 %
+    int8_t nteR = 0; uint8_t ntePct = 30; int8_t octR = 0; bool eInv = false; // nteR -24..24 (neg = both ways), octR -3..3
+    uint8_t tiePct = 0, eLen2 = 0; int8_t eRot2 = 0; uint8_t ntOrd = 0; // eLen2 0 = layer 2 off; ntOrd 0 Lin 1 Rnd 2 PingP 3 Shuf
+    uint8_t lock = 0, ePuls2 = 0, logic = 0, velPct = 0;                 // lock 0 Off 1 Pitch 2 Rhythm 3 Both; logic 0 OR 1 AND 2 XOR 3 Accnt
+    uint32_t seed = 1;
+};
+// Random pattern generator settings (manual 4.11)
+struct RandGenSettings {
+    int8_t bias = 0, rang = 12; uint8_t rand = 25; int8_t den = 70;      // den 1..100 %, 0 Human, -1 Order, -2 Pitch, -3 Flip
+    bool scal = false; uint8_t vg = 10, ties = 10;
+};
+const char* genLogicLabel(int v);
+const char* genOrderLabel(int v);
+const char* genLockLabel(int v);
+std::string randDenLabel(int v);
+
 struct Sequencer {
     Mode mode = Mode::Mono;
     uint8_t channel = 0;           // 0..15 (mono/poly)
@@ -237,6 +255,8 @@ struct Sequencer {
     // perform view (manual 5.7)
     int8_t perfTrans = 0;          // -7..7 scale degrees
     int8_t perfRot = 0;            // -7..7 steps
+    GenSettings gen;
+    RandGenSettings rgen;
     uint8_t kbVel = 75;            // keyboard view velocity
     int8_t kbBase = 0;             // keyboard base octave -2..4 (C0 default) (tracks[0] = 32 note steps, tracks[1] = 64 trigger steps)
     bool active = true;            // inactive = transport stopped for this seq
@@ -266,6 +286,15 @@ struct Project {
     double bpm = 120.0;            // internal clock tempo
     bool internalClock = false;    // false = follow host transport
     OutputMode output = OutputMode::Both;
+    int8_t scaleMaster = -1;       // -1 off, else the sequencer whose scale + root every other one follows
+    // recording settings (manual 4.12)
+    bool recQt = true;             // quantize live recording
+    uint8_t recQtPct = 100;        // 0..100 %
+    bool recOvdb = true;           // overdub (false: replace as the playhead passes)
+    uint8_t recMode = 0;           // 0 Loop, 1 1Shot, 2 Xtend
+    uint8_t recCountIn = 0;        // 0 Off, 1 Beat, 2 1/2 Bar, 3 Bar, 4 2 Bars
+    uint8_t metroCh = 0;           // 0 off, 1..16 MIDI channel for the metronome
+    uint8_t metroMode = 0;         // 0 Always while recording, 1 count-in only
 
     Project() { reset(); }
     void reset();
@@ -276,7 +305,7 @@ struct GrooveTemplate { const char* name; std::array<float, 16> timing; std::arr
 const GrooveTemplate& grooveTemplate(int index /* 1..kNumGrooves */);
 
 // Serialisation (plain text, versioned). Returns false if the data could not be parsed.
-std::string serialize(const Project& p);
+std::string serialize(const Project& p, int onlySeq = -1, int onlyPattern = -1); // onlySeq/onlyPattern: templates
 bool deserialize(const std::string& s, Project& p);
 
 const char* punchInLabel(int v);

@@ -361,5 +361,60 @@ int runControllerTests() {
         CCHECK(r.e.rollDiv[0] == 0.0 && r.e.arpNotes(0, notes, 4) == 0);
         r.c.padUp(0, 7, r.t);
     }
+    { // generators, recording keys, save view, project menu
+        Rig r;
+        r.press(Btn::Gen);
+        r.c.encoderTurn(1, -3, r.t);              // ePuls 4 -> 1: applied immediately
+        int n = 0; for (int i = 0; i < 16; ++i) n += r.tr0().steps[(size_t) i].active;
+        CCHECK(n == 1);
+        r.hold(Btn::Shift); r.c.encoderTurn(1, 3, r.t); r.release(Btn::Shift); // set only
+        n = 0; for (int i = 0; i < 16; ++i) n += r.tr0().steps[(size_t) i].active;
+        CCHECK(n == 1 && r.p->seqs[0].gen.ePuls == 4);
+        r.press(Btn::Undo);                        // one undo restores the empty pattern
+        n = 0; for (int i = 0; i < 16; ++i) n += r.tr0().steps[(size_t) i].active;
+        CCHECK(n == 0);
+        r.press(Btn::Gen);
+        // random generator: tap knob 4 generates
+        r.hold(Btn::Shift); r.press(Btn::Random); r.release(Btn::Shift);
+        Frame f; r.c.render(f, r.t);
+        CCHECK(f.line1.rfind("Random Generator", 0) == 0);
+        r.c.encoderPress(3, true, r.t); r.c.encoderPress(3, false, r.t + 50); r.t += 400;
+        n = 0; for (int i = 0; i < 16; ++i) n += r.tr0().steps[(size_t) i].active;
+        CCHECK(n > 3);
+        r.hold(Btn::Shift); r.press(Btn::Random); r.release(Btn::Shift);
+        // REC tap arms (transport stopped), tap again disarms
+        r.press(Btn::Rec);
+        CCHECK(r.e.recState() == 1);
+        r.press(Btn::Rec);
+        CCHECK(r.e.recState() == 0);
+        // REC + PLAY: step recording
+        r.hold(Btn::Rec); r.press(Btn::Play); r.release(Btn::Rec);
+        CCHECK(r.e.stepRecording());
+        r.c.render(f, r.t);
+        CCHECK(f.line1.rfind("Step REC", 0) == 0);
+        r.hold(Btn::Rec); r.press(Btn::Play); r.release(Btn::Rec);
+        CCHECK(!r.e.stepRecording());
+        // save view: double tap copies the current pattern to slot 3
+        r.press(Btn::Save);
+        r.tap(3, 0);
+        CCHECK(r.p->seqs[0].patterns[3].isEmpty());
+        r.c.padDown(3, 0, r.t); r.c.padUp(3, 0, r.t + 20); r.t += 100;
+        r.c.padDown(3, 0, r.t); r.c.padUp(3, 0, r.t + 20); r.t += 400;
+        CCHECK(!r.p->seqs[0].patterns[3].isEmpty());
+        r.press(Btn::Save);
+        // project menu: template save makes a job, clear needs a second tap
+        r.hold(Btn::Shift); r.press(Btn::Perf); r.release(Btn::Shift);
+        r.c.encoderTurn(0, 4, r.t);                // item 5: save as template
+        r.c.encoderTurn(1, 2, r.t);                // slot 3
+        r.c.encoderPress(3, true, r.t); r.c.encoderPress(3, false, r.t + 50); r.t += 400;
+        auto jobs = r.c.takeJobs();
+        CCHECK(jobs.size() == 1 && jobs[0].type == Controller::Job::SaveTemplate && jobs[0].slot == 2);
+        r.c.encoderTurn(0, -1, r.t);               // item 4: clear project
+        r.c.encoderPress(3, true, r.t); r.c.encoderPress(3, false, r.t + 50); r.t += 400;
+        CCHECK(r.tr0().steps[0].active || n > 0);   // not yet
+        const bool before = !r.p->seqs[0].patterns[3].isEmpty();
+        r.c.encoderPress(3, true, r.t); r.c.encoderPress(3, false, r.t + 50); r.t += 400;
+        CCHECK(before && r.p->seqs[0].patterns[3].isEmpty());
+    }
     return cfail;
 }

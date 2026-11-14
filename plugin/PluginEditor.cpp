@@ -200,56 +200,8 @@ void TekEditor::modifierKeysChanged(const juce::ModifierKeys& mods) {
 void TekEditor::refreshFrame() { withLock([&](tek::Controller& c) { c.render(frame, now()); }); }
 
 void TekEditor::timerCallback() {
-    bool wantMidi = false;
-    int target = 0;
-    withLock([&](tek::Controller& c) { wantMidi = c.takeMidiLoadRequest(); target = c.midiLoadTarget(); });
-    if (wantMidi) openMidiFile(target);
     refreshFrame();
     repaint();
-}
-
-// MIDI player mode: pick a .mid file and import its note on/off data (other events are ignored)
-void TekEditor::openMidiFile(int seq) {
-    chooser = std::make_unique<juce::FileChooser>("Choose a MIDI file", juce::File(), "*.mid;*.midi");
-    chooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
-        [this, seq](const juce::FileChooser& fc) {
-            auto file = fc.getResult();
-            if (!file.existsAsFile()) return;
-            juce::FileInputStream in(file);
-            juce::MidiFile mf;
-            if (!in.openedOk() || !mf.readFrom(in)) {
-                withLock([&](tek::Controller& c) { c.showMessage("COULD NOT READ MIDI FILE", now()); });
-                return;
-            }
-            int tpq = mf.getTimeFormat();
-            if (tpq <= 0) { // SMPTE time format: convert through seconds at 120 bpm
-                mf.convertTimestampTicksToSeconds();
-                tpq = -1;
-            }
-            std::vector<tek::ClipNote> notes;
-            for (int t = 0; t < mf.getNumTracks(); ++t) {
-                juce::MidiMessageSequence seqm(*mf.getTrack(t));
-                seqm.updateMatchedPairs();
-                for (int i = 0; i < seqm.getNumEvents(); ++i) {
-                    auto* ev = seqm.getEventPointer(i);
-                    if (!ev->message.isNoteOn()) continue;
-                    double on = ev->message.getTimeStamp();
-                    double off = ev->noteOffObject != nullptr ? ev->noteOffObject->message.getTimeStamp() : on + (tpq > 0 ? tpq / 4.0 : 0.125);
-                    if (tpq < 0) { on *= 2.0 * tek::kClipPpqn; off *= 2.0 * tek::kClipPpqn; } // seconds -> 96 ppqn at 120 bpm
-                    tek::ClipNote n;
-                    n.tick = (uint32_t) std::max(0.0, on);
-                    n.len = (uint32_t) std::max(1.0, off - on);
-                    n.note = (uint8_t) ev->message.getNoteNumber();
-                    n.vel = (uint8_t) juce::jlimit(1, 127, (int) ev->message.getVelocity());
-                    notes.push_back(n);
-                }
-            }
-            auto clip = tek::makeClip(std::move(notes), tpq > 0 ? tpq : tek::kClipPpqn, file.getFileNameWithoutExtension().toStdString());
-            withLock([&](tek::Controller& c) {
-                if (clip.notes.empty()) c.showMessage("NO NOTES IN FILE", now());
-                else c.setClip(seq, std::move(clip), now());
-            });
-        });
 }
 
 // ---------------------------------------------------------------------------- painting

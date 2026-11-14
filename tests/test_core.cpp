@@ -1,5 +1,6 @@
 // Headless tests for the TEK core (engine + controller). Build: see CMakeLists (target tek_tests).
 #include "../core/Engine.h"
+#include "../core/Generators.h"
 #include "../core/Controller.h"
 #include "../core/Chords.h"
 #include <algorithm>
@@ -637,6 +638,163 @@ static void testPerformTools() {
     }
 }
 
+// runs the engine block by block, calling `hook(ppq)` before each block
+template <typename F> static std::vector<Note> runHook(Engine& e, double beats, F hook, bool playing = true) {
+    std::vector<Note> notes;
+    const double sr = 48000.0, bpm = 120.0, pps = bpm / 60.0 / sr;
+    e.prepare(sr);
+    double ppq = 0.0;
+    std::vector<MidiIn> in; std::vector<MidiOut> out;
+    while (ppq < beats) {
+        out.clear();
+        hook(ppq);
+        Transport t; t.playing = playing; t.ppq = ppq; t.bpm = bpm;
+        e.process(t, 256, in, out);
+        for (auto& m : out) { int ty = m.status & 0xF0; if (ty == 0x90 || ty == 0x80) notes.push_back({ppq + m.sampleOffset * pps, m.status & 15, m.data1, m.data2, ty == 0x90}); }
+        ppq += 256 * pps;
+    }
+    return notes;
+}
+
+static void testGeneratorsRecording() {
+    // euclid rhythm + logic
+    {
+        GenSettings g; g.eLen = 16; g.ePuls = 4;
+        bool on[16], acc[16];
+        euclidRhythm(g, 16, on, acc);
+        CHECK(on[0] && on[4] && on[8] && on[12] && !on[1] && !on[2]);
+        g.eLen2 = 16; g.ePuls2 = 2; g.eRot2 = 2; g.logic = 0; // OR adds 2 and 10
+        euclidRhythm(g, 16, on, acc);
+        CHECK(on[2] && on[10] && on[0]);
+        g.logic = 3;                                          // Accnt: placement from layer 1 only
+        g.eRot2 = 0; euclidRhythm(g, 16, on, acc);
+        CHECK(on[0] && acc[0] && on[4] && !acc[4]);
+        g.eLen2 = 0; g.eInv = true; euclidRhythm(g, 16, on, acc);
+        CHECK(!on[0] && on[1]);
+    }
+    // euclid generate: writes the range, keeps fixed steps, lock rhythm keeps positions
+    {
+        auto p = std::make_unique<Project>();
+        auto& q = p->seqs[0];
+        auto& tr = q.pat().tracks[0];
+        setNote(tr, 3, 5); tr.steps[3].trig = Trig {TrigType::Fixed, 0, 0};
+        q.gen.eLen = 16; q.gen.ePuls = 4; q.gen.nteR = 7; q.gen.ntePct = 100;
+        euclidGenerate(q, 0);
+        int n = 0; for (int i = 0; i < 16; ++i) n += tr.steps[(size_t) i].active;
+        CHECK(n == 5 && tr.steps[0].active && tr.steps[3].notes[0] == 5);
+        bool varied = false; for (int i : {0, 4, 8, 12}) varied |= tr.steps[(size_t) i].notes[0] != 0;
+        CHECK(varied);
+        q.gen.lock = 2; q.gen.ePuls = 8; // rhythm locked: same positions
+        euclidGenerate(q, 0);
+        CHECK(tr.steps[4].active && !tr.steps[2].active);
+    }
+    // random generate: density, flip, order
+    {
+        auto p = std::make_unique<Project>();
+        auto& q = p->seqs[0];
+        auto& tr = q.pat().tracks[0];
+        q.rgen.den = 100; q.rgen.ties = 0;
+        randomGenerate(q, 0, 12345);
+        int n = 0; for (int i = 0; i < 16; ++i) n += tr.steps[(size_t) i].active;
+        CHECK(n == 16);
+        const int first = tr.steps[0].notes[0], last = tr.steps[15].notes[0];
+        q.rgen.den = -3; randomGenerate(q, 0, 1);                // flip
+        CHECK(tr.steps[0].notes[0] == last && tr.steps[15].notes[0] == first);
+        int sumA = 0, sumB = 0; for (int i = 0; i < 16; ++i) sumA += tr.steps[(size_t) i].notes[0];
+        q.rgen.den = -1; randomGenerate(q, 0, 99);               // order: same notes, shuffled
+        for (int i = 0; i < 16; ++i) sumB += tr.steps[(size_t) i].notes[0];
+        CHECK(sumA == sumB);
+        q.rgen.den = 20; randomGenerate(q, 0, 7);
+        n = 0; for (int i = 0; i < 16; ++i) n += tr.steps[(size_t) i].active;
+        CHECK(n > 0 && n < 10);
+    }
+    // live recording: punch in while playing, quantized to the nearest step, duration -> gate / tie
+    {
+        auto p = std::make_unique<Project>();
+        Engine e(*p);
+        bool armed = false, on1 = false, off1 = false, on2 = false, off2 = false;
+        runHook(e, 4.0, [&](double ppq) {
+            if (!armed && ppq > 0.05) { e.recArm(0, 0, false); armed = true; }
+            if (!on1 && ppq >= 0.49) { e.recInput(62, 90, true); on1 = true; }        // ~step 2 (0.5)
+            if (!off1 && ppq >= 0.60) { e.recInput(62, 0, false); off1 = true; }      // ~half a step
+            if (!on2 && ppq >= 1.24) { e.recInput(55, 100, true); on2 = true; }       // step 5, an octave below C2 root... G1
+            if (!off2 && ppq >= 1.80) { e.recInput(55, 0, false); off2 = true; }      // ~2.2 steps -> tie
+        });
+        auto& tr = p->seqs[0].pat().tracks[0];
+        CHECK(tr.steps[2].active && tr.steps[2].notes[0] == 2 && tr.steps[2].velocity == 90);
+        CHECK(tr.steps[2].gate > 20 && tr.steps[2].gate < 70);
+        CHECK(tr.steps[5].active && tr.steps[5].octave == 0 && tr.steps[5].notes[0] == 7 && tr.steps[5].tie >= 1);
+    }
+    // count-in: armed while stopped, recording starts one bar after the transport
+    {
+        auto p = std::make_unique<Project>();
+        p->recCountIn = 3; p->metroCh = 10;
+        Engine e(*p);
+        e.recArm(0, 0, false);
+        CHECK(e.recState() == 1);
+        bool a = false, b = false; int clicks = 0;
+        auto n = runHook(e, 6.0, [&](double ppq) {
+            if (!a && ppq >= 1.0) { e.recInput(60, 100, true); e.recInput(60, 0, false); a = true; }   // during the count-in
+            if (!b && ppq >= 5.5) { e.recInput(64, 100, true); e.recInput(64, 0, false); b = true; }   // after it
+        });
+        for (auto& x : n) if (x.on && x.ch == 9) ++clicks;
+        auto& tr = p->seqs[0].pat().tracks[0];
+        CHECK(!tr.steps[4].active && tr.steps[6].active);
+        CHECK(clicks >= 5);
+    }
+    // step recording + capture buffer
+    {
+        auto p = std::make_unique<Project>();
+        p->seqs[0].mode = Mode::Poly; p->seqs[0].nVoices = 4;
+        Engine e(*p);
+        e.stepRecStart(0, 0);
+        int k = 0;
+        runHook(e, 2.0, [&](double) {
+            const int kk = k++;
+            if (kk % 20) return; // ~100 ms apart
+            switch (kk / 20) {
+                case 1: e.recInput(60, 100, true); e.recInput(64, 100, true); break; // chord on step 1
+                case 2: e.recInput(60, 0, false); e.recInput(64, 0, false); break;
+                case 3: e.stepRecRest(); break;
+                case 4: e.recInput(67, 100, true); break;
+                case 5: e.recInput(67, 0, false); break;
+                default: break;
+            }
+        }, false);
+        auto& tr = p->seqs[0].pat().tracks[0];
+        CHECK(tr.steps[0].numNotes == 2 && !tr.steps[1].active && tr.steps[2].notes[0] == 7 && e.stepRecCursor() == 3);
+        CHECK(e.captureCount() == 3);
+        e.stepRecStop();
+        CHECK(e.captureToPattern(0, 0) == 2);
+        CHECK(tr.steps[0].numNotes == 2 && tr.steps[1].notes[0] == 7 && tr.end == 1);
+    }
+    // Xtend recording grows the range; pattern switch "In" = Beat
+    {
+        auto p = std::make_unique<Project>();
+        auto& tr = p->seqs[0].pat().tracks[0];
+        tr.end = 3; p->recMode = 2;
+        Engine e(*p);
+        bool armed = false;
+        runHook(e, 2.0, [&](double ppq) { if (!armed && ppq > 0.01) { e.recArm(0, 0, false); armed = true; } });
+        CHECK(tr.end >= 6);
+        auto p2 = std::make_unique<Project>();
+        p2->seqs[0].punchIn = 3;
+        Engine e2(*p2);
+        bool req = false;
+        runHook(e2, 1.2, [&](double ppq) { if (!req && ppq > 0.3) { e2.requestPattern(0, 5); req = true; } });
+        CHECK(p2->seqs[0].curPattern == 5);
+    }
+    // settings round trip
+    {
+        auto p = std::make_unique<Project>();
+        p->seqs[2].gen.ePuls = 9; p->seqs[2].rgen.den = -2; p->recMode = 1; p->scaleMaster = 3;
+        auto txt = serialize(*p); auto p2 = std::make_unique<Project>();
+        CHECK(deserialize(txt, *p2) && p2->seqs[2].gen.ePuls == 9 && p2->seqs[2].rgen.den == -2 && p2->recMode == 1 && p2->scaleMaster == 3);
+        auto one = serialize(*p, 2, 0);
+        CHECK(one.find("SEQ 0 ") == std::string::npos && one.find("SEQ 2 ") != std::string::npos);
+    }
+}
+
 int runControllerTests(); // defined in test_controller.cpp
 
 int main() {
@@ -659,6 +817,7 @@ int main() {
     testAccumulatorHarmonizer();
     testLiveArpLoop();
     testPerformTools();
+    testGeneratorsRecording();
     failures += runControllerTests();
     if (failures == 0) std::printf("ALL TESTS PASSED\n");
     else std::printf("%d FAILURE(S)\n", failures);

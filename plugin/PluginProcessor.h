@@ -4,7 +4,7 @@
 #include "Controller.h"
 #include "WebControl.h"
 
-class TekProcessor : public juce::AudioProcessor {
+class TekProcessor : public juce::AudioProcessor, private juce::Timer {
 public:
     TekProcessor();
     ~TekProcessor() override;
@@ -59,6 +59,17 @@ private:
     int echoHead = 0;
     bool isEcho(uint8_t st, uint8_t d1, uint8_t d2, double nowMs);
     double sampleRate = 44100.0;
+    // file jobs (message thread)
+    void timerCallback() override;
+    void runJob(const tek::Controller::Job& j);
+    void openMidiFile(int seq);
+    void applyProject(const std::string& text, const juce::String& okMsg);
+    void message(const juce::String& m);
+    static juce::File tekDir(const juce::String& sub);
+    static juce::File templateFile(int slot);
+    std::unique_ptr<juce::FileChooser> chooser;
+    std::string lastSaved;   // state at the last Ableton save / load
+    int templateScan = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(TekProcessor)
 };

@@ -2,6 +2,7 @@
 // Hardware emulation: buttons, 4 push encoders and the 16x8 pad grid drive the model exactly like
 // the panel (manual 1.10, 1.11, 3.x, 4.x, 6.1-6.5). The UI only forwards input and draws a Frame.
 #include "Engine.h"
+#include "Generators.h"
 #include <deque>
 #include <string>
 #include <vector>
@@ -53,10 +54,15 @@ public:
     int midiLoadTarget() const { return midiLoadSeq; }
     void setClip(int seq, MidiClip clip, double nowMs);
     void showMessage(const std::string& m, double nowMs) { msg(m, nowMs, 2500.0); }
+    // file work the host does off the audio lock (templates, project files, reloads)
+    struct Job { enum Type { ReloadPattern, ReloadProject, LoadProjectFile, SaveProjectFile, SaveTemplate, LoadTemplate } type; int seq, pattern, slot; };
+    std::vector<Job> takeJobs() { std::vector<Job> j; j.swap(jobs); return j; }
+    void setTemplateMask(uint32_t m) { templateMask = m; }
+    static constexpr int kTemplateSlots = 32;
 
 private:
-    enum class Menu { None, Setup, TrackM, StepM, Nudge, Bend, Groove, Arp, RandPerf };
-    enum class GridMode { Steps, Column, Load, Keys, Perform };
+    enum class Menu { None, Setup, TrackM, StepM, Nudge, Bend, Groove, Arp, RandPerf, Gen, RandGen, RecSet, Project };
+    enum class GridMode { Steps, Column, Load, Keys, Perform, Save };
 
     struct HeldPad { int x, y; double downMs; bool consumed; };
 
@@ -113,6 +119,17 @@ private:
     void loopPad(int x, int y, double nowMs);
     void editLoop(int knob, int delta, double nowMs);
     void preview(int note, int ch, int vel);
+    bool genMode() const { auto m = seq().mode; return m == Mode::Mono || m == Mode::Poly || m == Mode::Chord || m == Mode::Multi; }
+    int genTrack() const { return isMulti() ? trackIndex() : 0; }
+    void editGen(int knob, int delta, bool apply, double nowMs);
+    void genApply();
+    void editRandGen(int knob, int delta, double nowMs);
+    void editRecSet(int knob, int delta);
+    void editProject(int knob, int delta);
+    void projExecute(double nowMs);
+    void recTap(double nowMs);
+    void savePad(int x, int y, double nowMs);
+    void renderSave(Frame& f, double nowMs) const;
     void editRandPerf(int knob, int delta, double nowMs);
     void flowStep(int x, int y, double nowMs);
     void perfPad(int x, int y, bool down, double nowMs);
@@ -223,6 +240,14 @@ private:
     std::array<std::array<std::pair<uint8_t, uint8_t>, kNumTracks>, kNumSeqs> perfLoopSave {};
     std::array<bool, kNumSeqs> fillLatched {}, loopLatched {};
     std::unique_ptr<std::array<Sequencer, kNumSeqs>> snapshot;     // manual 5.9
+    bool genUndo = false;
+    double recDownMs = 0.0, lastRecTapMs = -1e9;
+    bool recTapToggled = false;
+    int projItem = 0, projSlot = 0, projConfirm = -1;
+    double projConfirmUntil = 0.0;
+    struct LastTap { int x = -1, y = -1; double ms = -1e9; } lastSaveTap;
+    uint32_t templateMask = 0;
+    std::vector<Job> jobs;
 public:
     bool hasSnapshot() const { return snapshot != nullptr; }
 };

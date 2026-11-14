@@ -11,6 +11,10 @@ Engine::Engine(Project& p) : proj(p) {
     previewOffs.reserve(64);
     due.reserve(4096);
     pendingPat.fill(-1);
+    sentPc.fill(-1);
+    recQueue.reserve(256);
+    capture.reserve(160);
+    recWritten.fill(-1e9);
     resetPending.fill(false);
     transposeOffset.fill(0);
 }
@@ -30,6 +34,8 @@ void Engine::requestPattern(int seq, int pattern) {
 
 void Engine::panic() { panicPending = true; }
 void Engine::resetSeq(int seq) { if (seq >= 0 && seq < kNumSeqs) resetPending[(size_t) seq] = true; }
+
+double Engine::countInBeatsFor(int v) { static const double b[5] = {0, 1, 2, 4, 8}; return b[std::clamp(v, 0, 4)]; }
 
 int Engine::positionFor(Dir dir, int start, int end, int64_t c) {
     const int len = end - start + 1;
@@ -92,6 +98,8 @@ void Engine::startAll(double ppq) {
     for (int s = 0; s < kNumSeqs; ++s)
         for (int t = 0; t < kNumTracks; ++t) initTrack(s, t, ppq);
     running = true;
+    sentPc.fill(-1); // resend program changes on start
+    if (recArmed && !recWait) { recArmed = false; recOn = true; recStartPpq = ppq + countInBeatsFor(proj.recCountIn); recWritten.fill(-1e9); }
 }
 
 void Engine::emitNoteOn(std::vector<MidiOut>& out, int off, int ch, int note, int vel) {
@@ -217,6 +225,12 @@ void Engine::scheduleStep(int s, int t, double grid, double L, double bpm) {
         if (blk != r.resetBlock) { r.resetBlock = blk; r.counter = 0; r.pos = -1; }
     }
 
+    const bool recHere = recOn && s == recSeq && grid >= recStartPpq;
+    // recording "Xtend": the range grows instead of wrapping (manual 4.12)
+    if (recHere && proj.recMode == 2 && !tr.hasLoop() && tr.dir == Dir::Forward && tr.end < kMaxSteps - 1) {
+        const int l0 = tr.end - tr.start + 1;
+        if (r.counter > 0 && r.counter % l0 == 0) tr.end = (uint8_t) (tr.end + 1);
+    }
     // a loop (manual 5.2) replaces the pattern range while it is set
     const int rs = tr.hasLoop() ? tr.loopStart : tr.start, re = tr.hasLoop() ? tr.loopEnd : tr.end;
     const int len = re - rs + 1;
@@ -232,6 +246,15 @@ void Engine::scheduleStep(int s, int t, double grid, double L, double bpm) {
         }
     } else pos = positionFor(tr.dir, rs, re, r.counter);
     r.pos = pos;
+    if (recHere) {
+        if (proj.recMode == 1 && pos == rs && grid > recStartPpq + L * 0.5 && t == 0) recOn = false; // 1Shot: one pass
+        else if (!proj.recOvdb && recWritten[(size_t) pos] < grid - L * 0.5) tr.steps[(size_t) pos].clear(); // replace as we pass
+    }
+    if (pendingPat[(size_t) s] >= 0 && q.punchIn == 2 && t == 0 && pos == rs && r.counter > 0) { // P.End: switch at the pattern end
+        q.curPattern = (uint8_t) pendingPat[(size_t) s]; pendingPat[(size_t) s] = -1;
+        r.counter = 0;
+        return scheduleStep(s, t, grid, L, bpm);
+    }
     if (q.perfRot != 0 && len > 0 && q.mode != Mode::Multi) pos = rs + (((pos - rs - q.perfRot) % len) + len) % len; // perform rotate
 
     { const uint32_t Lq = (uint32_t) std::clamp(std::lround(L * 960.0), 0L, 0xffffffL); // step length rides in ch/d1/d2
@@ -842,6 +865,7 @@ void Engine::process(const Transport& host, int numSamples, const std::vector<Mi
         if (used) continue;
         const int ks = std::clamp(kbTarget, 0, kNumSeqs - 1);
         auto& kq = proj.seqs[(size_t) ks];
+        recInput(m.data1, m.data2, on);
         if (kq.arp.type != kArpOff) arpKey(ks, m.data1, on);
         else liveNote(kq.channel, m.data1, m.data2, on);
     }
@@ -880,6 +904,8 @@ void Engine::process(const Transport& host, int numSamples, const std::vector<Mi
 
     const double ppqPerSample = tp.bpm / 60.0 / sr;
     const double blockEnd = tp.ppq + numSamples * ppqPerSample;
+    applyGlobals(out);
+    processRecording(tp.ppq, blockEnd, tp.bpm, tp.playing, numSamples, ppqPerSample, out);
 
     if (!tp.playing) {
         if (wasPlaying) { stopAll(out, 0); for (auto& a : arpRt) a.nextGrid = -1.0; }
@@ -910,14 +936,14 @@ void Engine::process(const Transport& host, int numSamples, const std::vector<Mi
     expectedPpq = blockEnd;
     if (proj.internalClock) intPpq = blockEnd;
 
-    // pattern switches at bar boundaries
-    {
-        double nextBar = std::floor(tp.ppq / 4.0 + 1e-9) * 4.0 + 4.0;
-        bool crosses = std::floor(tp.ppq / 4.0 + 1e-9) != std::floor(blockEnd / 4.0 + 1e-9) || std::fabs(std::fmod(tp.ppq, 4.0)) < 1e-9;
-        (void) nextBar;
-        if (crosses)
-            for (int s = 0; s < kNumSeqs; ++s)
-                if (pendingPat[(size_t) s] >= 0) { proj.seqs[(size_t) s].curPattern = (uint8_t) pendingPat[(size_t) s]; pendingPat[(size_t) s] = -1; }
+    // pattern switches, quantized by each sequencer's "In" setting (manual 3.15 / 4.13)
+    for (int s = 0; s < kNumSeqs; ++s) {
+        if (pendingPat[(size_t) s] < 0) continue;
+        static const double grid[9] = {4.0, 0.0, -1.0, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0}; // Glob = bar, P.End handled per step
+        const double g = grid[std::min<int>(8, proj.seqs[(size_t) s].punchIn)];
+        if (g < 0.0) continue;
+        bool crosses = g == 0.0 || std::floor(tp.ppq / g + 1e-9) != std::floor(blockEnd / g + 1e-9) || std::fabs(std::fmod(tp.ppq, g)) < 1e-9;
+        if (crosses) { proj.seqs[(size_t) s].curPattern = (uint8_t) pendingPat[(size_t) s]; pendingPat[(size_t) s] = -1; }
     }
 
     // ---- schedule steps one step ahead (allows negative offsets / swing)

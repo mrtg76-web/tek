@@ -1,8 +1,69 @@
-# TEK — 8 kanallı performans sequencer'ı (Faz 1–2 tamam, Faz 3a–3b: Keyboard, Loop, Arp, Perform araçları)
+# TEK — 8 kanallı performans sequencer'ı (Faz 1–3 tamam: modlar, performans araçları, generator'lar, kayıt)
 
 TEK, OXI ONE MKII kılavuzunu temel alan bir VST3/AU sequencer plugin'i. Ses üretmiyor, MIDI üretiyor. Ableton'daki synth'leri, drum rack'leri ve harici cihazları sürüyor.
 
-## Faz 3b: Flow, Roller, Random Perform, Perform, Snapshot (yeni)
+## Faz 3c: Generator'lar, kayıt, pattern ve proje yönetimi (yeni)
+
+**Euclid generator (GEN):** Mono, Poly, Chord ve Multitrack modlarında çalışır. Multitrack'te seçili track'e uygulanır.
+- Knob çevirdiğin anda desen yeniden üretilir.
+- SHIFT basılıyken çevirmek yalnızca değeri ayarlar, deseni değiştirmez.
+- Bir knoba dokunmak aynı ayarlarla yeni bir varyasyon üretir.
+- Menü açıldıktan sonra yapılan değişikliklerin tamamı tek UNDO ile geri alınır.
+- PAGE ile 4 sayfa arasında geçilir:
+  1. eLen, ePuls, eRot, Dens (katman 1 ve yoğunluk)
+  2. NteR, Nte%, OctR, eInv (nota aralığı, olasılık, oktav, ters çevirme)
+  3. Tie%, eLen2, eRot2, NtOrd (bağlama, katman 2, nota sırası)
+  4. Lock, ePul2, Logic (OR / AND / XOR / Accnt), Vel%
+- Fixed veya Locked koşullu adımlara dokunulmaz.
+- **Lock:** "Pitch" seçiliyse ritim değişir ama notalar korunur. "Rhythm" seçiliyse adım yerleri korunur, yalnızca notalar değişir.
+
+**Random generator (SHIFT+RANDOM):** RANDOM'a dokunmak bu menü ile Random Perform arasında geçiş yapar.
+- Sayfa 1: Bias, Rang, Rand, Den. Sayfa 2: Scal, V&G, Ties.
+- **Knob 4 (Den)'e dokununca desen üretilir.**
+- Den sağa çevrildiğinde yüzde değeri alır ve yeni desen üretir.
+- Den sola çevrildiğinde mevcut deseni değiştiren seçeneklere geçer:
+  - **Human:** zamanlamaya ve gate'e insan eli hissi verir.
+  - **Order:** notaların sırasını karıştırır.
+  - **Pitch:** sırayı korur, notaları yeniler.
+  - **Flip:** deseni tersten çalar.
+- Diğer knoblara dokunmak o değeri varsayılana döndürür.
+
+**Kayıt (REC).** Klavye görünümündeki pad'lerle ya da harici MIDI klavyeyle kayıt yapılır:
+- **REC'e dokun:**
+  - Transport çalıyorsa kayıt hemen başlar (punch-in).
+  - Duruyorsa kayıt hazır bekler (REC yavaş yanıp söner) ve Ableton Play'e basınca başlar. Count-in ayarlıysa önce sayım yapılır.
+  - Kayıt sürerken tekrar dokunmak kaydı bitirir.
+- **REC basılıyken STOP:** Kayıt ilk çaldığın notayla başlar.
+- **REC basılıyken PLAY:** Adım adım kayıt açılır veya kapanır.
+  - Her nota (ya da akor) bir adıma yazılır ve imleç ilerler.
+  - Knob 1'e dokunmak başa döner, knob 2 imleci kaydırır, knob 3'e dokunmak boş adım (rest) ekler, knob 4'e dokunmak bağ (tie) ekler.
+- **MIDI capture:** Çaldığın son notalar arka planda hep tutulur; tamponda nota varsa REC hafif kırmızı yanar.
+  - **REC'e çift dokununca** bu notalar sırayla sequencer'a yazılır. Aynı anda çalınan notalar tek adımda akor olur.
+  - REC'i basılı tutmak tamponu temizler.
+- **Kayıt ayarları (SHIFT+REC):**
+  - Sayfa 1: Qt (kuantize açık/kapalı), Qt% (kuantize oranı), Ovdb/NoOv, Mode.
+    - Mode: Loop sürekli kaydeder, 1Shot bir tur kaydeder, Xtend kayıt sürdükçe deseni uzatır.
+  - Sayfa 2: Cnt in (count-in süresi), Metro (metronomun MIDI kanalı), Md (metronom her zaman mı, yalnızca count-in'de mi).
+
+**Pattern'ler:**
+- **SAVE** görünümünde bir pad'e çift dokununca o sequencer'ın güncel pattern'i o slota kopyalanır.
+- **SHIFT+LOAD** güncel pattern'i Ableton setinin en son kaydedildiği hale döndürür.
+- **LOAD** görünümünde:
+  - SHIFT+pad o sütundaki pattern'i 8 sequencer'da birden yükler.
+  - SHIFT+PASTE+pad slotu siler. (Eskiden yalnızca SHIFT+pad siliyordu.)
+- Setup sayfa 2'deki **In** ayarı pattern geçişinin ne zaman olacağını belirler: OFF (hemen), P.End (pattern sonu), Beat, 1/2B, Bar, 2/4/8 Bar.
+- **PC / Bnk** ayarlandığında program change, ayar değiştiğinde ve transport her başladığında gönderilir.
+
+**Proje menüsü (SHIFT+PERF).** Knob 1 seçeneği seçer, knob 2 slotu veya değeri seçer, knob 4'e dokunmak seçeneği uygular. Geri alınamayan işlemler ikinci bir dokunuşla onay ister. Seçenekler:
+- **Reload project:** Ableton setinin son kaydedildiği hale döner.
+- **Load project file / Save project file:** Projeyi .tek dosyası olarak yükler veya kaydeder. Varsayılan klasör Belgeler/TEK/Projects.
+- **Clear project:** Bütün sequencer'ları siler.
+- **Save as template / Load template:** 32 slot vardır, dosyalar Belgeler/TEK/Templates klasöründe durur. Template, sequencer'ın ayarlarını ve güncel pattern'ini saklar.
+- **Load MIDI file:** PLYR modu için MIDI dosyası yükler.
+- **Scale master:** Seçilen sequencer'ın ölçeği ve kök notası diğer bütün sequencer'lara uygulanır. Harmonizer'daki ve Multitrack moddaki sequencer'lar hariç.
+- **Reload pattern:** Güncel pattern'i son kaydedilen hale döndürür.
+
+## Faz 3b: Flow, Roller, Random Perform, Perform, Snapshot
 
 - **Flow step:** FLOW'u basılı tutup bir pad'e dokun. Adım yoksa "Flow" koşullu bir adım oluşur, varsa Flow koşulu açılır/kapanır. Bu adımlar yalnızca FLOW basılıyken çalar.
 - **Roller** (Keyboard görünümü, 13. sütun): Bir roller pad'ini basılı tutarken basılı notalar sürekli tekrar çalar. Hız en üstte 1/32, en altta 1/4 noktalı. Önce nota sonra roller, ya da önce roller sonra nota; ikisi de olur. Transport dururken de çalışır.
@@ -97,7 +158,7 @@ Kullanım:
 
 ## Faz 2: MIDI Player modu
 
-Setup'ta knob 4 ile **PLYR** seç. Ardından **Shift + PERF**'e bas ve bilgisayarından bir **.mid** dosyası seç. Sequencer dosyadaki notaları döngü halinde, Ableton'a senkron çalar.
+Setup'ta knob 4 ile **PLYR** seç. Ardından **SHIFT + PERF**'e bas. Proje menüsü "Load MIDI file" seçeneğiyle açılır; knob 4'e dokunup bilgisayarından bir **.mid** dosyası seç. Sequencer dosyadaki notaları döngü halinde, Ableton'a senkron çalar.
 
 - Yalnızca nota on/off bilgisi alınır. CC, pitch bend ve sysex yok sayılır. En fazla 2000 nota, 96 PPQN çözünürlük.
 - Dosya projeye gömülür. Ableton setini kaydettiğinde dosya da onunla birlikte kaydedilir; orijinal .mid dosyası gerekmez.

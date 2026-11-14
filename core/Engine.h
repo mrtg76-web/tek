@@ -52,6 +52,25 @@ public:
     uint8_t seqSolo = 0;                                     // perform: soloed sequencers (bit mask)
     bool seqAudible(int s) const { const auto& q = proj.seqs[(size_t) s]; return q.active && !q.muted && (seqSolo == 0 || (seqSolo >> s) & 1); }
 
+    // --- recording (manual 4.12); call with the project lock held ---
+    void recInput(int note, int vel, bool on);          // a played note (keyboard view or MIDI input)
+    void recArm(int seq, int track, bool waitForNote);  // stopped: starts with the transport (after the count-in); playing: now
+    void recStop();
+    int recState() const;                               // 0 off, 1 armed, 2 count-in, 3 recording
+    double countInLeft() const;                         // beats left in the count-in
+    int recSeqIndex() const { return recSeq; }
+    void stepRecStart(int seq, int track);
+    void stepRecStop() { stepRec = false; }
+    bool stepRecording() const { return stepRec; }
+    int stepRecCursor() const { return stepCursor; }
+    void stepRecMove(int delta);
+    void stepRecReset();
+    void stepRecRest();
+    void stepRecTie();
+    int captureCount() const { return (int) capture.size(); }
+    void captureClear() { capture.clear(); }
+    int captureToPattern(int seq, int track);           // returns the number of steps written
+
     std::atomic<bool> flowHeld { false };
     std::array<uint8_t, kNumSeqs> soloMask {};  // multitrack solo bits (not saved)
 
@@ -68,6 +87,7 @@ public:
 
     // Deterministic step position for a step counter (exposed for tests).
     static int positionFor(Dir dir, int start, int end, int64_t counter);
+    static double countInBeatsFor(int v);
 
 private:
     struct TrackRt {
@@ -130,6 +150,10 @@ private:
     int degPitch(const Sequencer& q, int s, int base, int degree) const;
     void recordHarm(int s, const int* notes, int n);
     template <typename V> void assignChMx(const Sequencer& q, V* voices, int first, int n) const;
+    void processRecording(double ppq, double blockEnd, double bpm, bool playing, int numSamples, double ppqPerSample, std::vector<MidiOut>& out);
+    void writeRecNote(int s, int t, int idx, int note, int vel, bool add);
+    int recTrackFor(int s, int note) const;
+    void applyGlobals(std::vector<MidiOut>& out);
 
     Project& proj;
     double sr = 44100.0;
@@ -149,6 +173,20 @@ private:
     std::vector<LiveEv> liveQueue;
     struct PreviewOff { int ch, note; int64_t samplesLeft; };
     std::vector<PreviewOff> previewOffs;
+    // recording
+    struct RecIn { int note, vel; bool on; };
+    std::vector<RecIn> recQueue;
+    bool recArmed = false, recOn = false, recWait = false;
+    int recSeq = 0, recTrack = 0;
+    double recStartPpq = 0.0, lastPpq = 0.0;
+    struct RecHeld { int note, s, t, idx; double ppq, len; };
+    std::vector<RecHeld> recHeld;
+    std::array<double, kMaxSteps> recWritten {};       // ppq when a step was last recorded (no-overdub pass)
+    bool stepRec = false; int stepSeq = 0, stepTrack = 0, stepCursor = 0, stepHeld = 0; bool stepFresh = true;
+    struct Cap { int note, vel, group; };
+    std::vector<Cap> capture;
+    int64_t sampleClock = 0, lastCapSample = -100000; int capGroup = 0;
+    std::array<int, kNumSeqs> sentPc {};
     struct ArpRt {
         int held[32] {}; int nHeld = 0;     // in press order
         int down = 0;                       // physically held keys
