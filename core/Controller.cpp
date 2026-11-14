@@ -199,6 +199,7 @@ void Controller::padDown(int x, int y, double nowMs) {
     if (loopView && grid == GridMode::Steps) { loopPad(x, y, nowMs); return; }
     if (grid == GridMode::Load) { loadPad(x, y, nowMs); return; }
     if (grid == GridMode::Save) { savePad(x, y, nowMs); return; }
+    if (grid == GridMode::Mod) { modPadDown(x, y, nowMs); return; }
     if (grid == GridMode::Column) { columnPad(x, y, nowMs); return; }
 
     if (isPlayer()) { msg("SHIFT + PERF > LOAD MIDI FILE", nowMs); heldPads.push_back({x, y, nowMs, true}); return; }
@@ -1424,6 +1425,278 @@ void Controller::projExecute(double nowMs) {
     }
 }
 
+// ============================================================================ modulation view (manual 7.2 - 7.4)
+namespace {
+const char* kLaneParams[] = {"CC Dest 1", "CC Dest 2", "Mod Max", "Mod Min", "Mod Offset", "Mod Random", "Int Dest 1", "Int Amt 1",
+                             "Int Off 1", "Int Dest 2", "Int Amt 2", "Int Off 2", "Division", "Smooth", "Linked", "Init", "End",
+                             "Copy lane", "Paste lane", "Clear lane"};
+constexpr int kNumLaneParams = 20;
+const char* kMapParams[] = {"Type", "Number", "MIDI In Ch", "CC Out", "Amt 1", "Ofst 1", "Int Dest 1", "Int Dest 2", "Amt 2", "Ofst 2", "Param Dest"};
+constexpr int kNumMapParams = 11;
+std::string laneName(const ModLane& l, int i) {
+    if (l.cc1) return modOutLabel(l.cc1);
+    if (l.int1) return modDestLabel(l.int1);
+    return "L" + std::to_string(i + 1);
+}
+}
+
+void Controller::modPadDown(int x, int y, double nowMs) {
+    auto& ln = lane(selLane());
+    const int idx = modPg[(size_t) sel] * 16 + x;
+    heldPads.push_back({x, y, nowMs, true});
+    if (held(Btn::Init) || held(Btn::End)) { // independent lane length
+        if (ln.linked) { ln.start = track().start; ln.end = track().end; ln.linked = false; }
+        if (held(Btn::Init)) { ln.start = (uint8_t) idx; if (ln.end < ln.start) ln.end = ln.start; btnConsumed[(int) Btn::Init] = true; }
+        else { ln.end = (uint8_t) std::max<int>(idx, ln.start); btnConsumed[(int) Btn::End] = true; }
+        msg("LANE " + std::to_string(ln.start + 1) + "-" + std::to_string(ln.end + 1), nowMs);
+        return;
+    }
+    pushUndo();
+    const bool dbl = modLastTap.x == x && modLastTap.y == y && nowMs - modLastTap.ms < 450.0;
+    modLastTap = {x, y, nowMs};
+    ln.muted = false;
+    if (y == 7 && dbl) { ln.val[(size_t) idx] = 0; return; }
+    if (held(Btn::Shift)) { // negative values, top down
+        btnConsumed[(int) Btn::Shift] = true;
+        const int range = ln.min < 0 ? -ln.min : 127;
+        ln.val[(size_t) idx] = (int8_t) -std::max(1, (y + 1) * range / 8);
+    } else ln.val[(size_t) idx] = (int8_t) std::max(1, (8 - y) * ln.max / 8);
+}
+
+void Controller::editMod(int knob, int delta, double nowMs) {
+    const int L = modBank[(size_t) sel] * 4 + knob;
+    if (!heldPads.empty()) { // hold a column + turn: that lane's value at this step
+        for (auto& h : heldPads) h.consumed = true;
+        auto& ln = lane(L);
+        const int idx = modPg[(size_t) sel] * 16 + heldPads.front().x;
+        ln.val[(size_t) idx] = (int8_t) std::clamp(ln.val[(size_t) idx] + delta, -127, 127);
+        ln.muted = false;
+        modLaneSel[(size_t) sel] = L;
+        return;
+    }
+    if (modSettings) {
+        if (knob == 0) { modParam = std::clamp(modParam + delta, 0, kNumLaneParams - 1); return; }
+        if (knob != 1) return;
+        auto& ln = lane(selLane());
+        switch (modParam) {
+            case 0: ln.cc1 = clampT<uint8_t>(ln.cc1 + delta, 0, kModOutCount - 1); if (ln.cc1 == kModOutPB) ln.min = -127; break;
+            case 1: ln.cc2 = clampT<uint8_t>(ln.cc2 + delta, 0, kModOutCount - 1); if (ln.cc2 == kModOutPB) ln.min = -127; break;
+            case 2: ln.max = clampT<int8_t>(ln.max + delta, std::max(7, ln.min + 1), 127); break;
+            case 3: ln.min = clampT<int8_t>(ln.min + delta, -127, std::min(120, ln.max - 1)); break;
+            case 4: ln.offset = clampT<int8_t>(ln.offset + delta, -127, 127); break;
+            case 5: ln.random = clampT<int8_t>(ln.random + delta * 5, -100, 100); break;
+            case 6: ln.int1 = clampT<uint8_t>(ln.int1 + delta, 0, MD_Count - 1); break;
+            case 7: ln.amt1 = clampT<int8_t>(ln.amt1 + delta * 5, -100, 100); break;
+            case 8: ln.off1 = clampT<int8_t>(ln.off1 + delta, -127, 127); break;
+            case 9: ln.int2 = clampT<uint8_t>(ln.int2 + delta, 0, MD_Count - 1); break;
+            case 10: ln.amt2 = clampT<int8_t>(ln.amt2 + delta * 5, -100, 100); break;
+            case 11: ln.off2 = clampT<int8_t>(ln.off2 + delta, -127, 127); break;
+            case 12: ln.div = clampT<Division>((int) ln.div + delta, 0, (int) Division::Count - 1); ln.linked = false; break;
+            case 13: ln.smooth = clampT<uint8_t>(ln.smooth + delta * 5, 0, 100); break;
+            case 14: ln.linked = delta > 0; break;
+            case 15: if (ln.linked) { ln.start = track().start; ln.end = track().end; ln.linked = false; } ln.start = clampT<uint8_t>(ln.start + delta, 0, ln.end); break;
+            case 16: if (ln.linked) { ln.start = track().start; ln.end = track().end; ln.linked = false; } ln.end = clampT<uint8_t>(ln.end + delta, ln.start, kMaxSteps - 1); break;
+            default: break;
+        }
+        return;
+    }
+    auto& ln = lane(L);
+    modLaneSel[(size_t) sel] = L;
+    if (eng.recState() == 3 && eng.isRunning()) { // modulation recording (manual 7.4)
+        eng.modRecord(sel, L, eng.modLaneOut(sel, L) + delta * 4);
+        msg("REC MOD-" + std::to_string(L + 1), nowMs);
+        return;
+    }
+    ln.muted = false;
+    if (held(Btn::Shift)) { btnConsumed[(int) Btn::Shift] = true; ln.offset = clampT<int8_t>(ln.offset + delta, -127, 127); msg("OFFSET " + std::to_string(ln.offset), nowMs); return; }
+    const int rs = ln.linked ? track().start : ln.start, re = ln.linked ? track().end : ln.end;
+    int lo = 127, hi = -127;
+    for (int i = rs; i <= re; ++i) { auto& v = ln.val[(size_t) i]; v = (int8_t) std::clamp(v + delta * 2, (int) ln.min, (int) ln.max); lo = std::min<int>(lo, v); hi = std::max<int>(hi, v); }
+    msg("MOD-" + std::to_string(L + 1) + "  " + std::to_string(lo) + " .. " + std::to_string(hi), nowMs);
+}
+
+void Controller::modKnobTap(int knob, double nowMs) {
+    if (modSettings) {
+        if (knob != 3) return;
+        auto& ln = lane(selLane());
+        if (modParam == 17) { laneClip = std::make_unique<ModLane>(ln); msg("LANE COPIED", nowMs); }
+        if (modParam == 18 && laneClip) { pushUndo(); ln = *laneClip; msg("LANE PASTED", nowMs); }
+        if (modParam == 19) { pushUndo(); const uint8_t c = ln.cc1; ln = ModLane(); ln.cc1 = c; msg("LANE CLEARED", nowMs); }
+        return;
+    }
+    const int L = modBank[(size_t) sel] * 4 + knob;
+    if (held(Btn::Shift)) { btnConsumed[(int) Btn::Shift] = true; modLaneSel[(size_t) sel] = L; modSettings = true; modParam = 0; return; }
+    if (selLane() == L) { modBank[(size_t) sel] ^= 1; modLaneSel[(size_t) sel] = modBank[(size_t) sel] * 4 + knob; }
+    else modLaneSel[(size_t) sel] = L;
+}
+
+bool Controller::longPressKnob(int knob, double nowMs) {
+    if (held(Btn::Shift)) { // quick assign (manual 7.10)
+        const int d = quickDest(knob);
+        if (d <= 0) return false;
+        btnConsumed[(int) Btn::Shift] = true;
+        qaReturn = menu; qaReturnPage = menuPage; qaDest = d; qaSrc = 0; qaAmt = 50; qaOff = 0;
+        // show the source that already drives this destination
+        const auto& q = seq();
+        for (int i = 0; i < kNumLfos; ++i) if (q.lfo[(size_t) i].inDst == d) { qaSrc = 1 + i; qaAmt = q.lfo[(size_t) i].amt; }
+        for (int l = 0; l < kNumModLanes; ++l) { const auto& ln = lane(l); if (ln.int1 == d) { qaSrc = 3 + l; qaAmt = ln.amt1; qaOff = ln.off1; } if (ln.int2 == d) { qaSrc = 3 + l; qaAmt = ln.amt2; qaOff = ln.off2; } }
+        menu = Menu::Quick;
+        return true;
+    }
+    if (grid == GridMode::Mod && menu == Menu::None && !modSettings) {
+        auto& ln = lane(modBank[(size_t) sel] * 4 + knob);
+        ln.muted = !ln.muted;
+        msg(std::string("MOD-") + std::to_string(modBank[(size_t) sel] * 4 + knob + 1) + (ln.muted ? " MUTED" : " ON"), nowMs);
+        return true;
+    }
+    return false;
+}
+
+int Controller::quickDest(int knob) const {
+    switch (menu) {
+        case Menu::Arp: if (menuPage == 0) { static const int d[4] = {0, MD_ArpOct, MD_ArpGate, MD_ArpDiv}; return d[knob]; } return menuPage == 1 && knob == 0 ? MD_ArpAccent : 0;
+        case Menu::Lfo: { const int i = menuPage / 2; if (menuPage % 2 == 0 && knob == 1) return i ? MD_Lfo2Rate : MD_Lfo1Rate; if (menuPage % 2 == 0 && knob == 2) return i ? MD_Lfo2Amt : MD_Lfo1Amt; return 0; }
+        case Menu::Groove: return menuPage == 0 && knob == 0 ? MD_GrvVel : menuPage == 0 && knob == 1 ? MD_GrvTime : 0;
+        case Menu::RandPerf: if (menuPage == 0) { static const int d[4] = {MD_RpVel, MD_RpOct, MD_RpGate, 0}; return d[knob]; } return knob == 0 ? MD_RpNote : knob == 1 ? MD_RpTrig : 0;
+        case Menu::None: if (grid == GridMode::Steps) { static const int d[4] = {MD_Vel, MD_Pitch, MD_Gate, MD_Trig}; return d[knob]; } return 0;
+        default: return 0;
+    }
+}
+
+void Controller::quickAssignSource() {
+    auto& q = seq();
+    const int d = qaDest;
+    for (auto& lf : q.lfo) if (lf.inDst == d) lf.inDst = 0;
+    for (auto& ln : q.pat().lanes) { if (ln.int1 == d) ln.int1 = 0; if (ln.int2 == d) ln.int2 = 0; }
+    eng.learnSeq = eng.learnMap = -1;
+    if (qaSrc == 1 || qaSrc == 2) { auto& lf = q.lfo[(size_t) (qaSrc - 1)]; lf.inDst = (uint8_t) d; lf.amt = (uint8_t) std::abs(qaAmt); }
+    else if (qaSrc >= 3 && qaSrc <= 10) {
+        auto& ln = lane(qaSrc - 3);
+        if (ln.int1 == 0) { ln.int1 = (uint8_t) d; ln.amt1 = (int8_t) qaAmt; ln.off1 = (int8_t) qaOff; }
+        else { ln.int2 = (uint8_t) d; ln.amt2 = (int8_t) qaAmt; ln.off2 = (int8_t) qaOff; }
+        ln.muted = false;
+    } else if (qaSrc == 11) { // MIDI learn into a free matrix slot
+        for (int i = 0; i < kNumModMaps; ++i) {
+            auto& m = q.maps[(size_t) i];
+            if (m.type != 0 || m.int1 != 0) continue;
+            m = ModMap(); m.int1 = (uint8_t) d; m.amt1 = (int8_t) qaAmt; m.off1 = (int8_t) std::clamp(qaOff, -100, 100); m.chan = 1;
+            eng.learnSeq = sel; eng.learnMap = i;
+            break;
+        }
+    }
+}
+
+void Controller::editQuick(int knob, int delta, double nowMs) {
+    if (knob == 0) { qaSrc = std::clamp(qaSrc + delta, 0, 11); quickAssignSource(); }
+    if (knob == 1) { qaAmt = std::clamp(qaAmt + delta * 5, -100, 100); quickAssignSource(); }
+    if (knob == 2) { qaOff = std::clamp(qaOff + delta, -127, 127); quickAssignSource(); }
+    (void) nowMs;
+}
+
+void Controller::editLfo(int knob, int delta) {
+    auto& lf = seq().lfo[(size_t) (menuPage / 2)];
+    if (menuPage % 2 == 0) {
+        if (knob == 0) lf.wave = clampT<uint8_t>(lf.wave + delta, 0, kNumLfoWaves - 1);
+        if (knob == 1) { int r = lf.rate + delta; if (r == 0) r = delta > 0 ? 1 : -1; lf.rate = clampT<int8_t>(r, -11, 80); }
+        if (knob == 2) lf.amt = clampT<uint8_t>(lf.amt + delta * 2, 0, 100);
+        if (knob == 3) lf.inDst = clampT<uint8_t>(lf.inDst + delta, 0, MD_Count - 1);
+    } else {
+        if (knob == 0) lf.retrig = delta > 0;
+        if (knob == 1) lf.phase = clampT<uint8_t>(lf.phase + delta * 5, 0, 100);
+        if (knob == 2) lf.offset = clampT<int8_t>(lf.offset + delta, -127, 127);
+        if (knob == 3) lf.dst = clampT<uint8_t>(lf.dst + delta, 0, kModOutCount - 1);
+    }
+}
+
+void Controller::editMatrix(int knob, int delta) {
+    if (knob == 0) { mapSel = std::clamp(mapSel + delta, 0, kNumModMaps - 1); return; }
+    if (knob == 1) { mapParam = std::clamp(mapParam + delta, 0, kNumMapParams - 1); return; }
+    if (knob != 2) return;
+    auto& m = seq().maps[(size_t) mapSel];
+    switch (mapParam) {
+        case 0: m.type = clampT<uint8_t>(m.type + delta, 0, 2); break;
+        case 1: m.num = clampT<uint8_t>(m.num + delta, 0, 127); break;
+        case 2: m.chan = clampT<uint8_t>(m.chan + delta, 0, 17); break;
+        case 3: m.ccOut = clampT<uint8_t>(m.ccOut + delta, 0, 128); break;
+        case 4: m.amt1 = clampT<int8_t>(m.amt1 + delta * 5, -100, 100); break;
+        case 5: m.off1 = clampT<int8_t>(m.off1 + delta * 5, -100, 100); break;
+        case 6: m.int1 = clampT<uint8_t>(m.int1 + delta, 0, MD_Count - 1); break;
+        case 7: m.int2 = clampT<uint8_t>(m.int2 + delta, 0, MD_Count - 1); break;
+        case 8: m.amt2 = clampT<int8_t>(m.amt2 + delta * 5, -100, 100); break;
+        case 9: m.off2 = clampT<int8_t>(m.off2 + delta * 5, -100, 100); break;
+        case 10: m.par = clampT<uint8_t>(m.par + delta, 0, MP_Count - 1); break;
+        default: break;
+    }
+}
+
+void Controller::renderMod(Frame& f) const {
+    const int L = selLane();
+    const auto& ln = lane(L);
+    const uint32_t col = seqColor(seq().color);
+    const int rs = ln.linked ? track().start : ln.start, re = ln.linked ? track().end : ln.end;
+    const int ph = eng.modLanePos(sel, L);
+    const int negRange = ln.min < 0 ? -ln.min : 127;
+    for (int x = 0; x < 16; ++x) {
+        const int idx = modPg[(size_t) sel] * 16 + x;
+        const int v = ln.val[(size_t) idx];
+        const bool in = idx >= rs && idx <= re;
+        const float k = (in ? 1.0f : 0.3f) * (ln.muted ? 0.4f : 1.0f);
+        for (int y = 0; y < 8; ++y) {
+            uint32_t c = 0;
+            if (v > 0 && (8 - y) <= (v * 8 + ln.max - 1) / std::max<int>(1, ln.max)) c = dim(col, k);
+            if (v < 0 && (y + 1) <= (-v * 8 + negRange - 1) / negRange) c = dim(0xff3040, k);
+            if (idx == ph) c = c ? mix(c, 0xffffff, 0.45f) : 0x404448;
+            f.pads[(size_t) (y * 16 + x)] = c;
+        }
+    }
+}
+
+void Controller::renderModDisplay(Frame& f) const {
+    const int L = selLane();
+    const auto& ln = lane(L);
+    auto sv = [](int v) { return (v > 0 ? "+" : "") + std::to_string(v); };
+    if (!heldPads.empty()) {
+        const int idx = modPg[(size_t) sel] * 16 + heldPads.front().x;
+        f.line1 = "MOD-" + std::to_string(L + 1) + "  Step " + std::to_string(idx + 1);
+        f.line2 = "turn a knob: that lane's value here";
+        const int b = modBank[(size_t) sel] * 4;
+        for (int k = 0; k < 4; ++k) { f.labels[(size_t) k] = laneName(lane(b + k), b + k); f.values[(size_t) k] = std::to_string(lane(b + k).val[(size_t) idx]); }
+        return;
+    }
+    if (modSettings) {
+        f.line1 = "MOD-" + std::to_string(L + 1) + " " + laneName(ln, L) + "  Settings";
+        std::string v;
+        switch (modParam) {
+            case 0: v = modOutLabel(ln.cc1); break; case 1: v = modOutLabel(ln.cc2); break;
+            case 2: v = std::to_string(ln.max); break; case 3: v = std::to_string(ln.min); break;
+            case 4: v = sv(ln.offset); break; case 5: v = sv(ln.random) + "%"; break;
+            case 6: v = modDestLabel(ln.int1); break; case 7: v = sv(ln.amt1) + "%"; break; case 8: v = sv(ln.off1); break;
+            case 9: v = modDestLabel(ln.int2); break; case 10: v = sv(ln.amt2) + "%"; break; case 11: v = sv(ln.off2); break;
+            case 12: v = divisionLabel(ln.linked ? track().div : ln.div); break; case 13: v = ln.smooth ? std::to_string(ln.smooth) + "%" : "OFF"; break;
+            case 14: v = ln.linked ? "Yes" : "No"; break;
+            case 15: v = std::to_string((ln.linked ? track().start : ln.start) + 1); break;
+            case 16: v = std::to_string((ln.linked ? track().end : ln.end) + 1); break;
+            default: v = "tap knob 4"; break;
+        }
+        f.line2 = std::string("> ") + kLaneParams[modParam] + ": " + v;
+        f.labels = {"Param", "Value", "-", "Do"};
+        f.values = {std::to_string(modParam + 1) + "/" + std::to_string(kNumLaneParams), v, "", modParam >= 17 ? "tap" : ""};
+        return;
+    }
+    const int rs = ln.linked ? track().start : ln.start, re = ln.linked ? track().end : ln.end;
+    f.line1 = "MOD-" + std::to_string(L + 1) + " " + laneName(ln, L) + (ln.muted ? "  (muted)" : "") + (eng.modRecording() ? "  REC" : "");
+    f.line2 = std::to_string(rs + 1) + "-" + std::to_string(re + 1) + " " + divisionLabel(ln.linked ? track().div : ln.div) + "  out " + std::to_string(eng.modLaneOut(sel, L))
+            + (ln.offset ? "  ofs " + sv(ln.offset) : "");
+    const int b = modBank[(size_t) sel] * 4;
+    for (int k = 0; k < 4; ++k) {
+        const auto& l2 = lane(b + k);
+        std::string nm = laneName(l2, b + k);
+        if (b + k == L) nm = ">" + nm;
+        f.labels[(size_t) k] = nm;
+        f.values[(size_t) k] = l2.muted ? "--" : std::to_string(eng.modLanePos(sel, b + k) >= 0 ? eng.modLaneOut(sel, b + k) : 0);
+    }
+}
+
 // ============================================================================ arpeggiator menu (manual 5.3)
 void Controller::editArp(int knob, int delta, double nowMs) {
     auto& a = seq().arp;
@@ -1759,6 +2032,10 @@ void Controller::encoderTurn(int knob, int delta, double nowMs) {
     if (menu == Menu::RandGen) { editRandGen(knob, delta, nowMs); return; }
     if (menu == Menu::RecSet) { editRecSet(knob, delta); return; }
     if (menu == Menu::Project) { editProject(knob, delta); return; }
+    if (menu == Menu::Lfo) { editLfo(knob, delta); return; }
+    if (menu == Menu::Matrix) { editMatrix(knob, delta); return; }
+    if (menu == Menu::Quick) { editQuick(knob, delta, nowMs); return; }
+    if (grid == GridMode::Mod && menu == Menu::None) { editMod(knob, delta, nowMs); return; }
     if (eng.stepRecording() && menu == Menu::None && knob == 1) { eng.stepRecMove(delta); return; }
     if (menu != Menu::None && menu != Menu::Arp) { editMenu(knob, delta, nowMs); return; }
     if (held(Btn::Shift)) { btnConsumed[(int) Btn::Shift] = true; editShift(knob, delta, nowMs); return; }
@@ -1810,6 +2087,18 @@ void Controller::tapKnob(int knob, double nowMs) {
         return;
     }
     if (menu == Menu::Project) { if (knob == 0 || knob == 3) projExecute(nowMs); return; }
+    if (menu == Menu::Quick) { if (knob == 3) { menu = qaReturn; menuPage = qaReturnPage; eng.learnSeq = eng.learnMap = -1; } return; }
+    if (menu == Menu::Matrix) {
+        if (knob == 3) { if (eng.learnSeq >= 0) { eng.learnSeq = eng.learnMap = -1; msg("LEARN CANCELLED", nowMs); } else { eng.learnSeq = sel; eng.learnMap = mapSel; msg("WAITING FOR MIDI...", nowMs); } }
+        return;
+    }
+    if (menu == Menu::Lfo) { // tap: reset
+        auto& lf = seq().lfo[(size_t) (menuPage / 2)]; const Lfo d;
+        if (menuPage % 2 == 0) { if (knob == 0) lf.wave = d.wave; if (knob == 1) lf.rate = d.rate; if (knob == 2) lf.amt = d.amt; if (knob == 3) lf.inDst = 0; }
+        else { if (knob == 0) lf.retrig = false; if (knob == 1) lf.phase = 0; if (knob == 2) lf.offset = 0; if (knob == 3) lf.dst = 0; }
+        return;
+    }
+    if (grid == GridMode::Mod && menu == Menu::None) { modKnobTap(knob, nowMs); return; }
     if (menu == Menu::RecSet) return;
     if (eng.stepRecording() && menu == Menu::None) {
         if (knob == 0) { eng.stepRecReset(); msg("STEP REC: START", nowMs); }
@@ -1865,7 +2154,10 @@ void Controller::encoderPress(int knob, bool down, double nowMs) {
     if (knob < 0 || knob > 3) return;
     if (down) { encDown[(size_t) knob] = true; encConsumed[(size_t) knob] = false; encDownMs[(size_t) knob] = nowMs; return; }
     encDown[(size_t) knob] = false;
-    if (!encConsumed[(size_t) knob]) tapKnob(knob, nowMs);
+    if (!encConsumed[(size_t) knob]) {
+        if (nowMs - encDownMs[(size_t) knob] > 700.0 && longPressKnob(knob, nowMs)) return;
+        tapKnob(knob, nowMs);
+    }
 }
 
 // ============================================================================ buttons
@@ -1926,6 +2218,7 @@ void Controller::seqButton(int s, double nowMs) {
 
 void Controller::pageButton(int p, double nowMs) {
     auto& tr = track();
+    if (grid == GridMode::Mod && !held(Btn::Shift)) { modPg[(size_t) sel] = nowMs - lastTap[(size_t) ((int) Btn::P16 + p)] < kDoubleTapMs ? p + 4 : p; return; } // double tap: 65-128
     if (held(Btn::Shift)) { // move sequence: 16 left, 32 up, 48 down, 64 right
         btnConsumed[(int) Btn::Shift] = true;
         static const int dx[4] = {-1, 0, 0, 1}, dy[4] = {0, 1, -1, 0};
@@ -2086,13 +2379,15 @@ void Controller::button(Btn b, bool down, double nowMs) {
             else if (menu == Menu::Groove) menuPage = (menuPage + 1) % 2;
             else if (menu == Menu::Arp) menuPage = (menuPage + 1) % 3;
             else if (menu == Menu::RandPerf || menu == Menu::RandGen || menu == Menu::RecSet) menuPage = (menuPage + 1) % 2;
-            else if (menu == Menu::Gen) menuPage = (menuPage + 1) % 4;
+            else if (menu == Menu::Gen || menu == Menu::Lfo) menuPage = (menuPage + 1) % 4;
+            else if (grid == GridMode::Mod && menu == Menu::None) { modSettings = !modSettings; modParam = 0; }
             else if (menu == Menu::Nudge) menu = Menu::Bend;
             else if (menu == Menu::Bend) menu = Menu::Nudge;
             break;
         case Btn::Lfo:
-            if (shift) expandCondense(false, nowMs);
-            else msg("LFO: PHASE 4", nowMs);
+            if (shift) { expandCondense(false, nowMs); break; }
+            if (menu == Menu::Lfo) { menu = Menu::None; break; }
+            menu = Menu::Lfo; menuPage = 0;
             break;
         case Btn::Init:
             if (!shift && (held(Btn::End) || loopView)) {
@@ -2121,6 +2416,7 @@ void Controller::button(Btn b, bool down, double nowMs) {
             }
             break;
         case Btn::Paste:
+            if (shift && grid == GridMode::Mod) { pushUndo(); auto& ln = lane(selLane()); ln.val.fill(0); msg("MOD LANE CLEARED", nowMs); break; }
             if (shift && isStoch()) { pushUndo(); seq().pat().stoch.valid = false; msg("NEW PHRASE", nowMs); break; }
             if (shift && isMatr()) { pushUndo(); auto& mt = matTrack(matSel[(size_t) sel]); auto ch = mt.channel; auto base = mt.baseNote; mt = MatTrack(); mt.channel = ch; mt.baseNote = base; msg("TRACK CLEARED", nowMs); break; }
             if (shift) {
@@ -2209,6 +2505,15 @@ void Controller::button(Btn b, bool down, double nowMs) {
             if (!(seq().mode == Mode::Poly || seq().mode == Mode::Chord) && !isMulti()) grid = GridMode::Keys;
             break;
         case Btn::Random:
+            if (shift && grid == GridMode::Mod) { // random modulation lane
+                pushUndo();
+                auto& ln = lane(selLane());
+                uint32_t r = (uint32_t) (nowMs * 7.0) | 1u;
+                for (auto& v : ln.val) { r ^= r << 13; r ^= r >> 17; r ^= r << 5; v = (int8_t) (ln.min + (int) (r % (uint32_t) (ln.max - ln.min + 1))); }
+                ln.muted = false;
+                msg("RANDOM MOD LANE", nowMs);
+                break;
+            }
             if (isMatr()) { msg("HOLD RANDOM + TAP A LANE PAD", nowMs); break; }
             if (shift) { // random generator (manual 4.11)
                 if (menu == Menu::RandGen) { menu = Menu::None; break; }
@@ -2234,8 +2539,13 @@ void Controller::button(Btn b, bool down, double nowMs) {
             if (shift) { menu = menu == Menu::RecSet ? Menu::None : Menu::RecSet; menuPage = 0; btnConsumed[bi] = true; break; }
             recDownMs = nowMs; // the action happens on release (Rec + Play / Rec + Stop combos)
             break;
-        case Btn::Mod: case Btn::Arranger:
-            msg(std::string(btnLabel(b)) + ": PHASE 4", nowMs);
+        case Btn::Mod:
+            if (shift) { menu = menu == Menu::Matrix ? Menu::None : Menu::Matrix; break; } // mod matrix
+            if (grid == GridMode::Mod) { grid = GridMode::Steps; break; }
+            grid = GridMode::Mod; menu = Menu::None; modSettings = false;
+            break;
+        case Btn::Arranger:
+            msg(std::string(btnLabel(b)) + ": PHASE 4b", nowMs);
             break;
         default: break;
     }
@@ -2373,7 +2683,36 @@ void Controller::renderDisplay(Frame& f, double nowMs) const {
         if (grid == GridMode::Column) f.line2 = columnParam == 0 ? "Velocity editor" : columnParam == 1 ? "Gate editor (top = LEG)" : "Retrig editor (Shift: repeats)";
         if (grid == GridMode::Load) { f.line1 = "LOAD: rows = sequencers, columns = patterns"; f.line2 = "Copy/Paste + pad, Shift + pad = clear"; }
     }
-    if (menu == Menu::Gen) {
+    if (menu == Menu::Lfo) {
+        const int i = menuPage / 2;
+        const auto& lf = q.lfo[(size_t) i];
+        f.line1 = "LFO " + std::to_string(i + 1) + "  " + std::to_string(menuPage % 2 + 1) + "/2" + (lf.amt == 0 ? "  (Amt OFF)" : "");
+        f.line2 = "page: LFO1 / LFO2   Shift+hold knob: assign";
+        if (menuPage % 2 == 0) set("Wave", lfoWaveLabel(lf.wave), "Rate", lfoRateLabel(lf.rate), "Amt", lf.amt ? std::to_string(lf.amt) + "%" : std::string("OFF"), "InDst", modDestLabel(lf.inDst));
+        else set("Retrg", lf.retrig ? "ON" : "OFF", "Phase", std::to_string(lf.phase) + "%", "Offst", (lf.offset > 0 ? "+" : "") + std::to_string(lf.offset), "Dst", modOutLabel(lf.dst));
+    } else if (menu == Menu::Matrix) {
+        const auto& m = q.maps[(size_t) mapSel];
+        static const char* types[3] = {"OFF", "CC", "Note"};
+        std::string v;
+        switch (mapParam) {
+            case 0: v = types[m.type]; break; case 1: v = std::to_string(m.num); break;
+            case 2: v = m.chan == 0 ? "Same" : m.chan == 1 ? "All" : "Ch" + std::to_string(m.chan - 1); break;
+            case 3: v = m.ccOut ? "CC" + std::to_string(m.ccOut - 1) : "OFF"; break;
+            case 4: v = std::to_string(m.amt1) + "%"; break; case 5: v = std::to_string(m.off1) + "%"; break;
+            case 6: v = modDestLabel(m.int1); break; case 7: v = modDestLabel(m.int2); break;
+            case 8: v = std::to_string(m.amt2) + "%"; break; case 9: v = std::to_string(m.off2) + "%"; break;
+            default: v = modParamLabel(m.par); break;
+        }
+        const int last = eng.mapValue(sel, mapSel);
+        f.line1 = "Mod Matrix  Map " + std::to_string(mapSel + 1) + "  " + (m.type ? std::string(types[m.type]) + std::to_string(m.num) : std::string("OFF"));
+        f.line2 = eng.learnSeq >= 0 ? std::string("Waiting for MIDI...") : std::string("> ") + kMapParams[mapParam] + ": " + v + (last >= 0 ? "  in " + std::to_string(last) : "");
+        set("Map", std::to_string(mapSel + 1), "Param", kMapParams[mapParam], "Value", v, "Learn", eng.learnSeq >= 0 ? "..." : "tap");
+    } else if (menu == Menu::Quick) {
+        static const char* srcs[12] = {"OFF", "LFO1", "LFO2", "MO1", "MO2", "MO3", "MO4", "MO5", "MO6", "MO7", "MO8", "Learn"};
+        f.line1 = std::string("QUICK ASSIGN: ") + modDestLabel(qaDest);
+        f.line2 = eng.learnSeq >= 0 ? "Waiting for MIDI... (move a control)" : "source drives this parameter";
+        set("Src", srcs[qaSrc], "Amt", std::to_string(qaAmt) + "%", "Offst", std::to_string(qaOff), "Done", "tap");
+    } else if (menu == Menu::Gen) {
         const auto& g = q.gen;
         static const char* pageName[4] = {"Euclid L1", "Notes", "Tie / L2", "Lock / L2"};
         f.line1 = std::string("GEN ") + (isMulti() ? "T:" + std::to_string(trackIndex() + 1) + " " : "") + pageName[menuPage] + "  " + std::to_string(menuPage + 1) + "/4";
@@ -2441,6 +2780,7 @@ void Controller::renderDisplay(Frame& f, double nowMs) const {
         set("Len", tr.hasLoop() ? std::to_string(tr.loopEnd - tr.loopStart + 1) : "-", "Pos", tr.hasLoop() ? std::to_string(tr.loopStart + 1) : "-",
             "Rate", tr.loopRate == 255 ? divisionLabel(tr.div) : divisionLabel((Division) tr.loopRate), "Track", isMulti() ? std::to_string(trackIndex() + 1) : "-");
     }
+    if (grid == GridMode::Mod && menu == Menu::None) renderModDisplay(f);
     if (grid == GridMode::Save && menu == Menu::None) { f.line1 = "SAVE: rows = sequencers, columns = slots"; f.line2 = "double tap: save current pattern here"; }
     if (eng.stepRecording() && menu == Menu::None) {
         const auto& str = q.pat().tracks[(size_t) genTrack()];
@@ -2655,6 +2995,7 @@ void Controller::render(Frame& f, double nowMs) const {
     else if (grid == GridMode::Perform) renderPerform(f);
     else if (grid == GridMode::Load) renderLoad(f, nowMs);
     else if (grid == GridMode::Save) renderSave(f, nowMs);
+    else if (grid == GridMode::Mod) renderMod(f);
     else if (grid == GridMode::Column) renderColumn(f);
     else if (lanesView()) renderLanes(f, nowMs);
     else if (isStoch()) renderStoch(f);
@@ -2697,6 +3038,9 @@ void Controller::render(Frame& f, double nowMs) const {
     else if (track().hasLoop()) { uint32_t c = std::fmod(nowMs, 600.0) < 300.0 ? 0xb070ff : 0x302040; f.leds[(int) Btn::Init] = f.leds[(int) Btn::End] = c; }
     if (grid == GridMode::Perform) f.leds[(int) Btn::Perf] = 0xffffff;
     if (menu == Menu::Gen) f.leds[(int) Btn::Gen] = 0xffffff;
+    if (grid == GridMode::Mod || menu == Menu::Matrix) f.leds[(int) Btn::Mod] = 0xffffff;
+    if (menu == Menu::Lfo) f.leds[(int) Btn::Lfo] = 0xffffff;
+    else if (seq().lfo[0].amt || seq().lfo[1].amt) f.leds[(int) Btn::Lfo] = std::fmod(nowMs, 800.0) < 400.0 ? 0x5050a0 : 0x202040;
     if (grid == GridMode::Save) f.leds[(int) Btn::Save] = 0xffffff;
     if (menu == Menu::Project) f.leds[(int) Btn::Perf] = 0x30d0c0;
     {
@@ -2717,7 +3061,7 @@ void Controller::render(Frame& f, double nowMs) const {
     if (snapshot) { uint32_t c = std::fmod(nowMs, 500.0) < 250.0 ? 0x30ff60 : 0x103010; f.leds[(int) Btn::Load] = f.leds[(int) Btn::Undo] = c; }
     else if (!undoStack.empty()) f.leds[(int) Btn::Undo] = std::max<uint32_t>(f.leds[(int) Btn::Undo], 0x404040);
     if (menu == Menu::Setup || menu == Menu::TrackM || menu == Menu::StepM || menu == Menu::Groove || menu == Menu::Arp || menu == Menu::Gen
-        || menu == Menu::RandGen || menu == Menu::RecSet || menu == Menu::RandPerf || !heldPads.empty())
+        || menu == Menu::RandGen || menu == Menu::RecSet || menu == Menu::RandPerf || menu == Menu::Lfo || grid == GridMode::Mod || !heldPads.empty())
         f.leds[(int) Btn::Page] = std::fmod(nowMs, 600.0) < 300.0 ? 0xffffff : 0x303030;
 }
 

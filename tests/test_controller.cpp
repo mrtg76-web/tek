@@ -416,5 +416,47 @@ int runControllerTests() {
         r.c.encoderPress(3, true, r.t); r.c.encoderPress(3, false, r.t + 50); r.t += 400;
         CCHECK(before && r.p->seqs[0].patterns[3].isEmpty());
     }
+    { // modulation view, LFO menu, matrix learn, quick assign
+        Rig r;
+        r.press(Btn::Mod);
+        r.tap(3, 0);                               // top row = max
+        auto& ln = r.p->seqs[0].pat().lanes[0];
+        CCHECK(ln.val[3] == 127 && !ln.muted);
+        r.hold(Btn::Shift); r.tap(4, 1); r.release(Btn::Shift); // negative, 2/8 of 127
+        CCHECK(ln.val[4] == -31);
+        r.c.encoderTurn(0, -5, r.t);              // global: every step -10 (clamped to min 0)
+        CCHECK(ln.val[3] == 117 && ln.val[4] == 0);
+        r.c.encoderPress(1, true, r.t); r.c.encoderPress(1, false, r.t + 900); r.t += 1000; // long press: mute lane 2
+        CCHECK(r.p->seqs[0].pat().lanes[1].muted == false);
+        r.press(Btn::Page);                        // lane settings
+        r.c.encoderTurn(0, 6, r.t);                // Int Dest 1
+        r.c.encoderTurn(1, 1, r.t);
+        CCHECK(r.p->seqs[0].pat().lanes[0].int1 == MD_Vel); // knob 1 turned last: lane 1 is selected
+        Frame f; r.c.render(f, r.t);
+        CCHECK(f.line2.find("Int Dest 1: Vel") != std::string::npos);
+        r.press(Btn::Page); r.press(Btn::Mod);
+        r.press(Btn::Lfo);
+        r.c.encoderTurn(2, 10, r.t);
+        CCHECK(r.p->seqs[0].lfo[0].amt == 20);
+        r.press(Btn::Lfo);
+        r.hold(Btn::Shift); r.press(Btn::Mod); r.release(Btn::Shift);
+        r.c.encoderPress(3, true, r.t); r.c.encoderPress(3, false, r.t + 50); r.t += 400;
+        CCHECK(r.e.learnSeq == 0 && r.e.learnMap == 0);
+        r.c.encoderPress(3, true, r.t); r.c.encoderPress(3, false, r.t + 50); r.t += 400;
+        CCHECK(r.e.learnSeq == -1);
+        r.hold(Btn::Shift); r.press(Btn::Mod); r.release(Btn::Shift);
+        // quick assign: arp gate <- LFO 1
+        r.press(Btn::Arp);
+        r.hold(Btn::Shift); r.c.encoderPress(2, true, r.t); r.c.encoderPress(2, false, r.t + 900); r.t += 1000; r.release(Btn::Shift);
+        r.c.render(f, r.t);
+        CCHECK(f.line1 == "QUICK ASSIGN: ArpGat");
+        r.c.encoderTurn(0, 1, r.t);
+        CCHECK(r.p->seqs[0].lfo[0].inDst == MD_ArpGate && r.p->seqs[0].lfo[0].amt == 50);
+        r.c.encoderTurn(0, 3, r.t);                // -> mod lane 2
+        CCHECK(r.p->seqs[0].lfo[0].inDst == 0 && r.p->seqs[0].pat().lanes[1].int1 == MD_ArpGate);
+        r.c.encoderPress(3, true, r.t); r.c.encoderPress(3, false, r.t + 50); r.t += 400;
+        r.c.render(f, r.t);
+        CCHECK(f.line1.rfind("Keyboard Arp", 0) == 0);
+    }
     return cfail;
 }

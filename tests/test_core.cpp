@@ -795,6 +795,100 @@ static void testGeneratorsRecording() {
     }
 }
 
+// runs one second-ish of blocks feeding `in` on the first block; returns raw output
+static std::vector<MidiOut> runRaw(Engine& e, double beats, std::vector<MidiIn> first, bool playing = true) {
+    std::vector<MidiOut> all;
+    const double sr = 48000.0, bpm = 120.0, pps = bpm / 60.0 / sr;
+    e.prepare(sr);
+    double ppq = 0.0; bool fed = false;
+    while (ppq < beats) {
+        std::vector<MidiOut> out; std::vector<MidiIn> in;
+        if (!fed) { in = first; fed = true; }
+        Transport t; t.playing = playing; t.ppq = ppq; t.bpm = bpm;
+        e.process(t, 256, in, out);
+        all.insert(all.end(), out.begin(), out.end());
+        ppq += 256 * pps;
+    }
+    return all;
+}
+
+static void testModulation() {
+    // lane -> CC out (only while unmuted), values follow the steps
+    {
+        auto p = std::make_unique<Project>();
+        auto& ln = p->seqs[0].pat().lanes[0];
+        for (int i = 0; i < 16; ++i) ln.val[(size_t) i] = (int8_t) (i * 8);
+        Engine e0(*p);
+        int cc = 0; for (auto& m : runRaw(e0, 1.0, {})) cc += (m.status & 0xF0) == 0xB0;
+        CHECK(cc == 0);                                  // muted by default
+        ln.muted = false;
+        Engine e(*p);
+        std::vector<int> vals;
+        for (auto& m : runRaw(e, 1.0, {})) if ((m.status & 0xF0) == 0xB0 && m.data1 == 1) vals.push_back(m.data2);
+        CHECK((vals == std::vector<int>{0, 8, 16, 24}));
+    }
+    // lane -> internal velocity (non destructive)
+    {
+        auto p = std::make_unique<Project>();
+        setNote(p->seqs[0].pat().tracks[0], 0, 0, 100);
+        auto& ln = p->seqs[0].pat().lanes[1];
+        ln.muted = false; ln.cc1 = 0; ln.min = -127; ln.int1 = MD_Vel; ln.amt1 = 100;
+        ln.val.fill(-40);
+        Engine e(*p);
+        auto n = ons(run(e, 0.25));
+        CHECK(n.size() == 1 && n[0].vel == 60);
+        CHECK(p->seqs[0].pat().tracks[0].steps[0].velocity == 100);
+    }
+    // LFO -> CC (square wave flips between two values), LFO -> internal arp gate restored after the block
+    {
+        auto p = std::make_unique<Project>();
+        auto& lf = p->seqs[0].lfo[0];
+        lf.wave = 2; lf.rate = -10; lf.amt = 100; lf.dst = 1 + 74; // 1/16 note cycle
+        Engine e(*p);
+        std::vector<int> v;
+        for (auto& m : runRaw(e, 1.0, {})) if ((m.status & 0xF0) == 0xB0 && m.data1 == 74) v.push_back(m.data2);
+        CHECK(v.size() >= 6 && v[0] == 127 && v[1] == 0);
+        lf.inDst = MD_ArpGate; const int g0 = p->seqs[0].arp.gate;
+        Engine e2(*p); runRaw(e2, 0.5, {});
+        CHECK(p->seqs[0].arp.gate == g0);
+    }
+    // matrix: CC in -> internal velocity, forwarded CC, global mute, MIDI learn
+    {
+        auto p = std::make_unique<Project>();
+        setNote(p->seqs[0].pat().tracks[0], 0, 0, 100);
+        auto& m = p->seqs[0].maps[0];
+        m.type = 1; m.num = 20; m.chan = 1; m.int1 = MD_Vel; m.amt1 = 50;
+        auto& f = p->seqs[0].maps[1];
+        f.type = 1; f.num = 21; f.chan = 1; f.ccOut = 1 + 74;
+        Engine e(*p);
+        auto out = runRaw(e, 0.25, {{0xB0, 20, 0}, {0xB2, 21, 99}});
+        int vel = -1; bool fwd = false;
+        for (auto& o : out) { if ((o.status & 0xF0) == 0x90) vel = o.data2; if (o.status == 0xB0 && o.data1 == 74 && o.data2 == 99) fwd = true; }
+        CHECK(vel == 36 && fwd);                          // 100 + (-128 * 50%)
+        auto& g = p->seqs[0].maps[2];
+        g.type = 1; g.num = 22; g.chan = 1; g.par = MP_Mute;
+        Engine e2(*p); runRaw(e2, 0.1, {{0xB0, 22, 127}});
+        CHECK(p->seqs[0].muted);
+        Engine e3(*p); e3.learnSeq = 0; e3.learnMap = 5;
+        runRaw(e3, 0.1, {{0xB4, 33, 10}});
+        CHECK(p->seqs[0].maps[5].type == 1 && p->seqs[0].maps[5].num == 33 && p->seqs[0].maps[5].chan == 6);
+    }
+    // latch recording writes the lane while playing; settings round trip
+    {
+        auto p = std::make_unique<Project>();
+        Engine e(*p);
+        bool once = false;
+        runHook(e, 1.0, [&](double ppq) { if (!once && ppq > 0.1) { e.modRecord(0, 2, 90); once = true; } });
+        const auto& ln = p->seqs[0].pat().lanes[2];
+        CHECK(!ln.muted && ln.val[1] == 90 && ln.val[3] == 90);
+        p->seqs[0].lfo[1].wave = 4; p->seqs[0].maps[3].par = MP_Root; p->seqs[0].pat().lanes[5].int2 = MD_Gate;
+        auto txt = serialize(*p); auto p2 = std::make_unique<Project>();
+        CHECK(deserialize(txt, *p2) && p2->seqs[0].lfo[1].wave == 4 && p2->seqs[0].maps[3].par == MP_Root
+              && p2->seqs[0].pat().lanes[5].int2 == MD_Gate && p2->seqs[0].pat().lanes[2].val[3] == 90 && p2->seqs[0].pat().lanes[0].cc1 == 2);
+        CHECK(txt.find("ML 1 ") == std::string::npos); // untouched lanes are not written
+    }
+}
+
 int runControllerTests(); // defined in test_controller.cpp
 
 int main() {
@@ -818,6 +912,7 @@ int main() {
     testLiveArpLoop();
     testPerformTools();
     testGeneratorsRecording();
+    testModulation();
     failures += runControllerTests();
     if (failures == 0) std::printf("ALL TESTS PASSED\n");
     else std::printf("%d FAILURE(S)\n", failures);

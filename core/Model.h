@@ -184,8 +184,63 @@ struct MidiClip {
 // count and rounds the loop length up to whole bars.
 MidiClip makeClip(std::vector<ClipNote> notes, int ppqn, const std::string& name);
 
+// ---------------------------------------------------------------- modulation (manual 7.x)
+constexpr int kNumModLanes = 8, kNumLfos = 2, kNumModMaps = 8;
+// Internal (non destructive) destinations. Every source adds a bipolar -127..127 value.
+enum ModDest : uint8_t { MD_Off = 0, MD_Vel, MD_Pitch, MD_Oct, MD_Gate, MD_Rept, MD_Trig, MD_Div, MD_GrvVel, MD_GrvTime,
+                         MD_ArpDiv, MD_ArpGate, MD_ArpOct, MD_ArpAccent, MD_Lfo1Rate, MD_Lfo1Amt, MD_Lfo2Rate, MD_Lfo2Amt,
+                         MD_RpVel, MD_RpOct, MD_RpGate, MD_RpNote, MD_RpTrig, MD_ChType, MD_ChVoic, MD_ChSpread, MD_ChStrum,
+                         MD_AccAmt, MD_Count };
+const char* modDestLabel(int d);
+// MIDI output destination: 0 Off, 1..128 = CC 0..127, 129 Pitch Bend, 130 Aftertouch, 131 Program Change
+constexpr int kModOutPB = 129, kModOutAT = 130, kModOutPC = 131, kModOutCount = 132;
+std::string modOutLabel(int v);
+// Global (destructive) parameter destinations of the mod matrix
+enum ModParam : uint8_t { MP_Off = 0, MP_Mute, MP_Enable, MP_Scale, MP_Root, MP_Swing, MP_Div, MP_Dir, MP_Count };
+const char* modParamLabel(int p);
+
+struct ModLane {
+    std::array<int8_t, kMaxSteps> val {};
+    uint8_t start = 0, end = 15;
+    Division div = Division::Sixteenth;
+    bool linked = true;             // follow track 1's range and division
+    uint8_t cc1 = 0, cc2 = 0;       // MIDI destinations (see kModOut*)
+    int8_t max = 127, min = 0, offset = 0, random = 0;
+    uint8_t int1 = 0, int2 = 0;     // internal destinations
+    int8_t amt1 = 100, amt2 = 100, off1 = 0, off2 = 0;
+    uint8_t smooth = 0;             // 0..100 % glide into the next step
+    bool muted = true;
+    bool isDefault(int laneIndex) const;
+};
+extern const uint8_t kLaneDefaultCC[kNumModLanes];
+struct Lfo {
+    uint8_t wave = 0;               // see lfoWaveLabel
+    int8_t rate = -5;               // < 0: clocked (index -rate-1, see lfoRateLabel), > 0: free running
+    uint8_t amt = 0;                // 0..100 % (internal + MIDI)
+    bool retrig = false;
+    uint8_t phase = 0;              // 0..100 %
+    int8_t offset = 0;              // -127..127 (MIDI only)
+    uint8_t inDst = 0, dst = 0;     // internal / MIDI destination
+};
+constexpr int kNumLfoWaves = 7;
+const char* lfoWaveLabel(int w);
+std::string lfoRateLabel(int r);
+double lfoClockBeats(int r);        // cycle length in beats for a clocked rate
+double lfoHz(int r);                // free running rate
+struct ModMap {
+    uint8_t type = 0;               // 0 Off, 1 CC, 2 Note
+    uint8_t num = 1;
+    uint8_t chan = 0;               // 0 Same (sequencer channel), 1 All, 2..17 = channel 1..16
+    uint8_t ccOut = 0;              // forwarded CC (0 off, 1..128 = CC 0..127)
+    int8_t amt1 = 100, off1 = 0;
+    uint8_t int1 = 0, int2 = 0;
+    int8_t amt2 = 100, off2 = 0;
+    uint8_t par = 0;                // ModParam
+};
+
 struct Pattern {
     std::array<Track, kNumTracks> tracks;
+    std::array<ModLane, kNumModLanes> lanes;
     Stochastic stoch;
     Matriceal mat;
     MidiClip clip;
@@ -257,6 +312,8 @@ struct Sequencer {
     int8_t perfRot = 0;            // -7..7 steps
     GenSettings gen;
     RandGenSettings rgen;
+    std::array<Lfo, kNumLfos> lfo;
+    std::array<ModMap, kNumModMaps> maps;
     uint8_t kbVel = 75;            // keyboard view velocity
     int8_t kbBase = 0;             // keyboard base octave -2..4 (C0 default) (tracks[0] = 32 note steps, tracks[1] = 64 trigger steps)
     bool active = true;            // inactive = transport stopped for this seq

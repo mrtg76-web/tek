@@ -1,8 +1,57 @@
-# TEK — 8 kanallı performans sequencer'ı (Faz 1–3 tamam: modlar, performans araçları, generator'lar, kayıt)
+# TEK — 8 kanallı performans sequencer'ı (Faz 1–3 ve 4a tamam: modlar, performans araçları, generator'lar, kayıt, modülasyon)
 
 TEK, OXI ONE MKII kılavuzunu temel alan bir VST3/AU sequencer plugin'i. Ses üretmiyor, MIDI üretiyor. Ableton'daki synth'leri, drum rack'leri ve harici cihazları sürüyor.
 
-## Faz 3c: Generator'lar, kayıt, pattern ve proje yönetimi (yeni)
+## Faz 4a: Modülasyon (yeni)
+
+**MOD görünümü (MOD tuşu).** Her pattern'de 8 mod lane vardır. Grid seçili lane'i gösterir: sütunlar adımlar, satırlar değerdir.
+- Pad'e dokunmak o adımın değerini ayarlar; en üst satır en yüksek değerdir.
+- SHIFT+pad negatif değer girer, kırmızı ve yukarıdan aşağı görünür.
+- En alt pad'e çift dokunmak o adımı 0 yapar.
+- Lane varsayılan olarak kapalıdır (mute). Pad'e dokunmak ya da knob çevirmek lane'i açar.
+- Varsayılan hedefler sırasıyla ModW, CC2, CC3, Expr, CC5, CC6, CC7, CC8. MIDI, sequencer'ın kanalından çıkar.
+
+Knoblar o anda seçili 4 lane'e bağlıdır (1–4 ya da 5–8):
+- **Knob çevirmek** lane'in bütün adımlarını birlikte yukarı veya aşağı kaydırır.
+- **SHIFT+çevirmek** lane'in offset'ini değiştirir.
+- **Knoba dokunmak** o lane'i seçer. Seçili lane'in knobuna tekrar dokunmak 1–4 ile 5–8 arasında geçer.
+- **Knobu 1 saniye basılı tutmak** lane'i mute eder veya açar.
+- **Pad basılıyken knob çevirmek** o adımın değerini ince ayarlar.
+
+Diğer komutlar:
+- **PAGE** lane ayarlarını açar. Knob 1 ayarı seçer, knob 2 değeri değiştirir; Copy/Paste/Clear için knob 4'e dokunulur.
+  - Ayarlar: CC hedef 1–2 (CC, PB, AT, PC), Max, Min, Offset, Random, iç hedef 1–2 ile miktar ve offset'leri, Division, Smooth, Linked, Init, End.
+- **INIT/END+pad** lane'in uzunluğunu ayarlar. Bunu yapınca lane sequencer'dan bağımsız olur.
+- **16/32/48/64** adım sayfasını değiştirir; çift dokunuş 65–128. adımlara geçer.
+- **SHIFT+RANDOM** rastgele bir lane üretir. **SHIFT+PASTE** lane'i temizler.
+- **Modülasyon kaydı:** Ableton çalarken REC'e bas, sonra MOD görünümünde bir knob çevir. Değer, knobu bıraktıktan sonra 2 vuruş daha o lane'e yazılmaya devam eder.
+
+**İç hedefler.** Kaydedilmiş nota verisi hiç değişmez; değişiklik yalnızca çalarken uygulanır. Hedefler:
+- Nota: Vel, Pitch, Oct, Gate, Rept, Trig%, Div
+- Groove: GrvVel, GrvTim
+- Arpeggiator: ArpDiv, ArpGat, ArpOct, ArpAcc
+- LFO: LFO 1–2 Rate ve Amt
+- Random Perform: RpVel, RpOct, RpGate, RpNote, RpTrig
+- Chord: ChType, ChVoic, ChSprd, ChStrm
+- Accumulator: AccAmt
+
+**LFO (LFO tuşu).** Her sequencer'da 2 LFO vardır; PAGE ile LFO1 a/b ve LFO2 a/b sayfaları arasında geçilir.
+- Wave: Tri, Sine, Squr, Ramp, Fall, S_H, Nois.
+- Rate: sola çevrilince tempoya bağlıdır (8 Bar … 1/32), sağa çevrilince serbest çalışır (Hz).
+- Amt, InDst (iç hedef), Retrg, Phase, Offst, Dst (MIDI hedefi).
+- LFO'lar yalnızca transport çalarken çalışır. Knoba dokunmak değeri sıfırlar.
+
+**Mod matrix (SHIFT+MOD).** Her sequencer'da 8 eşleme vardır.
+- Knob 1 eşlemeyi, knob 2 parametreyi seçer, knob 3 değeri değiştirir. **Knob 4'e dokunmak MIDI learn'ü başlatır:** harici kontrolcüde bir knob çevir ya da bir notaya bas.
+- Parametreler: Type (CC/Note), Number, MIDI In Ch (Same/All/1–16), CC Out (gelen değeri başka bir CC olarak iletir), Amt/Ofst, iç hedef 1–2.
+- **Param Dest** kalıcı değişiklik yapar: Mute, Enable, Scale, Root, Swing, Div, Dir.
+
+**Quick Assign.** SHIFT basılıyken bir knobu 1 saniye basılı tut. O parametrenin kaynağını seçme ekranı açılır.
+- Kaynaklar: LFO1, LFO2, MO1–MO8 (mod lane'ler) veya Learn (harici MIDI).
+- Amt ve Offst de bu ekrandan ayarlanır. Knob 4'e dokunmak ekranı kapatır.
+- Kullanılabildiği yerler: Arp menüsü (Oct, Gate, Div, Accent), LFO menüsü (Rate, Amt), Groove (Accent, Time), Random Perform ve normal adım görünümü (Vel, Pitch, Gate, Trig).
+
+## Faz 3c: Generator'lar, kayıt, pattern ve proje yönetimi
 
 **Euclid generator (GEN):** Mono, Poly, Chord ve Multitrack modlarında çalışır. Multitrack'te seçili track'e uygulanır.
 - Knob çevirdiğin anda desen yeniden üretilir.

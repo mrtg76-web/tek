@@ -1,5 +1,7 @@
 #include "Model.h"
 #include <sstream>
+#include <cmath>
+#include <cstdio>
 #include <algorithm>
 #include <vector>
 
@@ -117,6 +119,7 @@ void Project::reset() {
         s.channel = (uint8_t) i;
         s.color = (uint8_t) i;
         for (auto& p : s.patterns) {
+            for (int l = 0; l < kNumModLanes; ++l) p.lanes[(size_t) l].cc1 = kLaneDefaultCC[l];
             for (auto& mt : p.mat.tracks) mt.channel = (uint8_t) i;
             for (int t = 0; t < kNumTracks; ++t) {
                 auto& tr = p.tracks[(size_t) t];
@@ -226,6 +229,40 @@ static bool stepIsDefault(const Step& s) {
         && s.accAmt == 0 && s.accMode == 0 && s.accMax == 7 && s.accMin == 0 && s.accTarget == 0 && s.accPctMode == 0 && s.accProb == 100;
 }
 
+const char* modDestLabel(int d) {
+    static const char* l[] = {"OFF", "Vel", "Pitch", "Oct", "Gate", "Rept", "Trig%", "Div", "GrvVel", "GrvTim",
+                              "ArpDiv", "ArpGat", "ArpOct", "ArpAcc", "L1Rate", "L1Amt", "L2Rate", "L2Amt",
+                              "RpVel", "RpOct", "RpGate", "RpNote", "RpTrig", "ChType", "ChVoic", "ChSprd", "ChStrm", "AccAmt"};
+    return (d >= 0 && d < MD_Count) ? l[d] : "?";
+}
+std::string modOutLabel(int v) {
+    if (v <= 0) return "OFF";
+    if (v <= 128) {
+        switch (v - 1) { case 1: return "ModW"; case 7: return "Vol"; case 10: return "Pan"; case 11: return "Expr"; case 74: return "Cut74"; default: break; }
+        return "CC" + std::to_string(v - 1);
+    }
+    return v == kModOutPB ? "PB" : v == kModOutAT ? "AT" : "PC";
+}
+const char* modParamLabel(int p) {
+    static const char* l[] = {"OFF", "Mute", "Enable", "Scale", "Root", "Swing", "Div", "Dir"};
+    return (p >= 0 && p < MP_Count) ? l[p] : "?";
+}
+const uint8_t kLaneDefaultCC[kNumModLanes] = {2, 3, 4, 12, 6, 7, 8, 9}; // ModW CC2 CC3 Expr CC5 CC6 CC7 CC8 (manual 7.2)
+bool ModLane::isDefault(int idx) const {
+    ModLane d; d.cc1 = kLaneDefaultCC[idx & 7];
+    return val == d.val && start == d.start && end == d.end && div == d.div && linked == d.linked && cc1 == d.cc1 && cc2 == d.cc2
+        && max == d.max && min == d.min && offset == d.offset && random == d.random && int1 == d.int1 && int2 == d.int2
+        && amt1 == d.amt1 && amt2 == d.amt2 && off1 == d.off1 && off2 == d.off2 && smooth == d.smooth && muted == d.muted;
+}
+const char* lfoWaveLabel(int w) { static const char* l[] = {"Tri", "Sine", "Squr", "Ramp", "Fall", "S_H", "Nois"}; return l[std::clamp(w, 0, kNumLfoWaves - 1)]; }
+static const double kLfoBeats[11] = {32, 16, 8, 4, 2, 1, 2.0 / 3.0, 0.5, 1.0 / 3.0, 0.25, 0.125};
+double lfoClockBeats(int r) { return kLfoBeats[std::clamp(-r - 1, 0, 10)]; }
+double lfoHz(int r) { return 0.01 * std::pow(1.1, std::max(1, r)); }
+std::string lfoRateLabel(int r) {
+    if (r < 0) { static const char* l[11] = {"8Bar", "4Bar", "2Bar", "1Bar", "1/2", "1/4", "1/4t", "1/8", "1/8t", "1/16", "1/32"}; return l[std::clamp(-r - 1, 0, 10)]; }
+    char b[16]; std::snprintf(b, sizeof b, "%.2fHz", lfoHz(r)); return b;
+}
+
 const char* genLogicLabel(int v) { static const char* l[] = {"OR", "AND", "XOR", "Accnt"}; return l[v & 3]; }
 const char* genOrderLabel(int v) { static const char* l[] = {"Lin", "Rnd", "PingP", "Shuf"}; return l[v & 3]; }
 const char* genLockLabel(int v) { static const char* l[] = {"OFF", "Pitch", "Rhythm", "Both"}; return l[v & 3]; }
@@ -267,11 +304,32 @@ std::string serialize(const Project& p, int onlySeq, int onlyPattern) {
             o << "RGN " << s << ' ' << (int) r.bias << ' ' << (int) r.rang << ' ' << (int) r.rand << ' ' << (int) r.den << ' ' << (int) r.scal << ' '
               << (int) r.vg << ' ' << (int) r.ties << '\n';
         }
+        for (int i = 0; i < kNumLfos; ++i) {
+            const auto& l = q.lfo[(size_t) i];
+            o << "LF " << s << ' ' << i << ' ' << (int) l.wave << ' ' << (int) l.rate << ' ' << (int) l.amt << ' ' << (int) l.retrig << ' '
+              << (int) l.phase << ' ' << (int) l.offset << ' ' << (int) l.inDst << ' ' << (int) l.dst << '\n';
+        }
+        for (int i = 0; i < kNumModMaps; ++i) {
+            const auto& m = q.maps[(size_t) i];
+            if (m.type == 0 && m.ccOut == 0 && m.int1 == 0 && m.int2 == 0 && m.par == 0) continue;
+            o << "MM " << s << ' ' << i << ' ' << (int) m.type << ' ' << (int) m.num << ' ' << (int) m.chan << ' ' << (int) m.ccOut << ' '
+              << (int) m.amt1 << ' ' << (int) m.off1 << ' ' << (int) m.int1 << ' ' << (int) m.int2 << ' ' << (int) m.amt2 << ' ' << (int) m.off2 << ' ' << (int) m.par << '\n';
+        }
         o << "SQ2 " << s << ' ' << (int) q.bassMode << ' ' << (int) q.chMx << ' ' << (int) q.voice << ' ' << (int) q.harm << '\n';
         for (int pi = 0; pi < kNumPatterns; ++pi) {
             if (onlyPattern >= 0 && pi != onlyPattern) continue;
             const auto& pat = q.patterns[(size_t) pi];
             o << "PAT " << s << ' ' << pi << ' ' << (int) pat.swing << '\n';
+            for (int l = 0; l < kNumModLanes; ++l) {
+                const auto& ln = pat.lanes[(size_t) l];
+                if (ln.isDefault(l)) continue;
+                o << "ML " << s << ' ' << pi << ' ' << l << ' ' << (int) ln.start << ' ' << (int) ln.end << ' ' << (int) ln.div << ' ' << (int) ln.linked << ' '
+                  << (int) ln.cc1 << ' ' << (int) ln.cc2 << ' ' << (int) ln.max << ' ' << (int) ln.min << ' ' << (int) ln.offset << ' ' << (int) ln.random << ' '
+                  << (int) ln.int1 << ' ' << (int) ln.int2 << ' ' << (int) ln.amt1 << ' ' << (int) ln.amt2 << ' ' << (int) ln.off1 << ' ' << (int) ln.off2 << ' '
+                  << (int) ln.smooth << ' ' << (int) ln.muted;
+                for (auto v : ln.val) o << ' ' << (int) v;
+                o << '\n';
+            }
             if (!pat.clip.notes.empty()) {
                 std::string nm = pat.clip.name;
                 for (auto& c : nm) if (c == ' ' || c == '\n' || c == '\r' || c == '\t') c = '_';
@@ -372,6 +430,33 @@ bool deserialize(const std::string& str, Project& p) {
             p.recQt = at(0) != 0; p.recQtPct = clampv<uint8_t>(at(1), 0, 100); p.recOvdb = at(2) != 0;
             p.recMode = clampv<uint8_t>(at(3), 0, 2); p.recCountIn = clampv<uint8_t>(at(4), 0, 4);
             p.metroCh = clampv<uint8_t>(at(5), 0, 16); p.metroMode = clampv<uint8_t>(at(6), 0, 1);
+        } else if (tag == "LF" && v.size() >= 10) {
+            int s = at(0), i = at(1); if (s < 0 || s >= kNumSeqs || i < 0 || i >= kNumLfos) continue;
+            auto& l = p.seqs[(size_t) s].lfo[(size_t) i];
+            l.wave = clampv<uint8_t>(at(2), 0, kNumLfoWaves - 1); l.rate = clampv<int8_t>(at(3), -11, 80); if (l.rate == 0) l.rate = -5;
+            l.amt = clampv<uint8_t>(at(4), 0, 100); l.retrig = at(5) != 0; l.phase = clampv<uint8_t>(at(6), 0, 100);
+            l.offset = clampv<int8_t>(at(7), -127, 127); l.inDst = clampv<uint8_t>(at(8), 0, MD_Count - 1); l.dst = clampv<uint8_t>(at(9), 0, kModOutCount - 1);
+        } else if (tag == "MM" && v.size() >= 13) {
+            int s = at(0), i = at(1); if (s < 0 || s >= kNumSeqs || i < 0 || i >= kNumModMaps) continue;
+            auto& m = p.seqs[(size_t) s].maps[(size_t) i];
+            m.type = clampv<uint8_t>(at(2), 0, 2); m.num = clampv<uint8_t>(at(3), 0, 127); m.chan = clampv<uint8_t>(at(4), 0, 17);
+            m.ccOut = clampv<uint8_t>(at(5), 0, 128); m.amt1 = clampv<int8_t>(at(6), -100, 100); m.off1 = clampv<int8_t>(at(7), -100, 100);
+            m.int1 = clampv<uint8_t>(at(8), 0, MD_Count - 1); m.int2 = clampv<uint8_t>(at(9), 0, MD_Count - 1);
+            m.amt2 = clampv<int8_t>(at(10), -100, 100); m.off2 = clampv<int8_t>(at(11), -100, 100); m.par = clampv<uint8_t>(at(12), 0, MP_Count - 1);
+        } else if (tag == "ML" && v.size() >= 21 + kMaxSteps) {
+            int s = at(0), pi = at(1), l = at(2);
+            if (s < 0 || s >= kNumSeqs || pi < 0 || pi >= kNumPatterns || l < 0 || l >= kNumModLanes) continue;
+            auto& ln = p.seqs[(size_t) s].patterns[(size_t) pi].lanes[(size_t) l];
+            ln.start = clampv<uint8_t>(at(3), 0, kMaxSteps - 1); ln.end = clampv<uint8_t>(at(4), ln.start, kMaxSteps - 1);
+            ln.div = clampv<Division>(at(5), 0, (int) Division::Count - 1); ln.linked = at(6) != 0;
+            ln.cc1 = clampv<uint8_t>(at(7), 0, kModOutCount - 1); ln.cc2 = clampv<uint8_t>(at(8), 0, kModOutCount - 1);
+            ln.max = clampv<int8_t>(at(9), 7, 127); ln.min = clampv<int8_t>(at(10), -127, 120);
+            ln.offset = clampv<int8_t>(at(11), -127, 127); ln.random = clampv<int8_t>(at(12), -100, 100);
+            ln.int1 = clampv<uint8_t>(at(13), 0, MD_Count - 1); ln.int2 = clampv<uint8_t>(at(14), 0, MD_Count - 1);
+            ln.amt1 = clampv<int8_t>(at(15), -100, 100); ln.amt2 = clampv<int8_t>(at(16), -100, 100);
+            ln.off1 = clampv<int8_t>(at(17), -127, 127); ln.off2 = clampv<int8_t>(at(18), -127, 127);
+            ln.smooth = clampv<uint8_t>(at(19), 0, 100); ln.muted = at(20) != 0;
+            for (int k = 0; k < kMaxSteps; ++k) ln.val[(size_t) k] = clampv<int8_t>(at(21 + (size_t) k), -127, 127);
         } else if (tag == "GEN" && v.size() >= 17) {
             int s = at(0); if (s < 0 || s >= kNumSeqs) continue;
             auto& g = p.seqs[(size_t) s].gen;

@@ -5,6 +5,7 @@ static const char* kTekWebPage = R"TEK(<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="format-detection" content="telephone=no, date=no, address=no, email=no">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
@@ -14,11 +15,12 @@ static const char* kTekWebPage = R"TEK(<!DOCTYPE html>
 <style>
   * { touch-action: none; -webkit-tap-highlight-color: transparent; }
   html, body { margin: 0; height: 100%; background: #121314; overflow: hidden; overscroll-behavior: none;
-    -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; touch-action: none;
+    -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; touch-action: none; -webkit-tap-highlight-color: transparent;
     font-family: -apple-system, "Helvetica Neue", Arial, sans-serif; }
   #stage { position: absolute; left: 0; top: 0; width: 1366px; height: 1024px; transform-origin: 0 0; }
   .panel { position: absolute; left: 6px; top: 6px; width: 1354px; height: 1012px; background: #1b1c1e; border-radius: 18px; }
   .el { position: absolute; box-sizing: border-box; }
+  a[href^="tel"], a[x-apple-data-detectors] { color: inherit !important; text-decoration: none !important; pointer-events: none !important; }
   .pad { border-radius: 8px; background: #26282b; contain: layout paint; }
   .btn { border-radius: 9px; background: #2b2d30; color: #fff; text-align: center; overflow: hidden; }
   .btn .l { font-weight: 700; font-size: 15px; margin-top: 14px; }
@@ -118,7 +120,7 @@ static const char* kTekWebPage = R"TEK(<!DOCTYPE html>
   for (let r = 0; r < 8; r++) {
     const idx = 29 + r;
     const b = mk('seq', 16, 390 + r * 78, 70, 70);
-    b.textContent = String(r + 1);
+    b.textContent = String(r + 1) + '\u2060'; // word joiner: keeps phone-number detection away
     b.dataset.kind = 'btn'; b.dataset.a = idx;
     btnEls[idx] = b;
   }
@@ -144,7 +146,7 @@ static const char* kTekWebPage = R"TEK(<!DOCTYPE html>
     const net = rtt < 0 ? '' : ' &nbsp; ping ' + Math.round(rtt) + ' (max ' + Math.round(worst) + ')';
     const pd = typeof pred === 'undefined' ? '' : ' &nbsp; pred ' + (pred && offset !== null ? 'ON' : 'off');
     const ui = typeof uiWorst === 'undefined' ? '' : ' &nbsp; ui max ' + Math.round(uiWorst);
-    status.innerHTML = 'TEK v3b5 &nbsp; ' + (connected ? '<b>connected</b>' : '<b class="off">connecting…</b>') +
+    status.innerHTML = 'TEK v4a &nbsp; ' + (connected ? '<b>connected</b>' : '<b class="off">connecting…</b>') +
       ' &nbsp; ' + url + net + pd + ui;
   }
   // keep-alive: small upstream packets keep the Wi-Fi radios awake and measure the round trip

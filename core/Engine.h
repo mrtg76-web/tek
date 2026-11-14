@@ -71,6 +71,15 @@ public:
     void captureClear() { capture.clear(); }
     int captureToPattern(int seq, int track);           // returns the number of steps written
 
+    // --- modulation (manual 7.x); call with the project lock held ---
+    int modLanePos(int s, int l) const { return laneRt[(size_t) s][(size_t) l].posUi.load(std::memory_order_relaxed); }
+    int modLaneOut(int s, int l) const { return laneRt[(size_t) s][(size_t) l].outUi.load(std::memory_order_relaxed); }
+    int modValue(int s, int dest) const { return (dest > 0 && dest < MD_Count) ? modSum[(size_t) s][(size_t) dest] : 0; }
+    int mapValue(int s, int m) const { return mapVal[(size_t) s][(size_t) m]; }
+    void modRecord(int s, int lane, int value);         // latch-record a lane value while playing
+    bool modRecording() const { return latch.s >= 0 && latch.until > lastPpq; }
+    int learnSeq = -1, learnMap = -1;                   // mod matrix MIDI learn target
+
     std::atomic<bool> flowHeld { false };
     std::array<uint8_t, kNumSeqs> soloMask {};  // multitrack solo bits (not saved)
 
@@ -154,6 +163,12 @@ private:
     void writeRecNote(int s, int t, int idx, int note, int vel, bool add);
     int recTrackFor(int s, int note) const;
     void applyGlobals(std::vector<MidiOut>& out);
+    void computeMod(double ppq, double bpm, bool playing, std::vector<MidiOut>& out);
+    void applySeqMods();
+    void restoreSeqMods();
+    void modInput(uint8_t status, uint8_t d1, uint8_t d2, std::vector<MidiOut>& out);
+    void sendModOut(int s, int dest, int value, int& last, std::vector<MidiOut>& out);
+    uint8_t seqOutChannel(int s) const;
 
     Project& proj;
     double sr = 44100.0;
@@ -187,6 +202,18 @@ private:
     std::vector<Cap> capture;
     int64_t sampleClock = 0, lastCapSample = -100000; int capGroup = 0;
     std::array<int, kNumSeqs> sentPc {};
+    // modulation
+    std::array<std::array<int, MD_Count>, kNumSeqs> modSum {};
+    struct LaneRt { int last[2] = {-99999, -99999}; std::atomic<int> posUi { -1 }, outUi { 0 }; };
+    std::array<std::array<LaneRt, kNumModLanes>, kNumSeqs> laneRt;
+    struct LfoRt { int last = -99999; };
+    std::array<std::array<LfoRt, kNumLfos>, kNumSeqs> lfoRt {};
+    std::array<std::array<int, kNumModMaps>, kNumSeqs> mapVal {};
+    std::array<double, kNumSeqs> lastStepPpq {};
+    std::array<int64_t, kNumSeqs> lastStepSample {};
+    struct Latch { int s = -1, lane = 0, value = 0; double until = -1.0; } latch;
+    struct SeqSave { int8_t rpVel, rpOct, rpGate, rpNote; uint8_t rpTrig; int16_t grvA, grvT; Division arpDiv; uint8_t arpGate; int8_t arpOct, arpAcc; bool valid = false; };
+    std::array<SeqSave, kNumSeqs> seqSave {};
     struct ArpRt {
         int held[32] {}; int nHeld = 0;     // in press order
         int down = 0;                       // physically held keys

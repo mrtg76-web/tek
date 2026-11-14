@@ -61,8 +61,8 @@ public:
     static constexpr int kTemplateSlots = 32;
 
 private:
-    enum class Menu { None, Setup, TrackM, StepM, Nudge, Bend, Groove, Arp, RandPerf, Gen, RandGen, RecSet, Project };
-    enum class GridMode { Steps, Column, Load, Keys, Perform, Save };
+    enum class Menu { None, Setup, TrackM, StepM, Nudge, Bend, Groove, Arp, RandPerf, Gen, RandGen, RecSet, Project, Lfo, Matrix, Quick };
+    enum class GridMode { Steps, Column, Load, Keys, Perform, Save, Mod };
 
     struct HeldPad { int x, y; double downMs; bool consumed; };
 
@@ -129,6 +129,21 @@ private:
     void projExecute(double nowMs);
     void recTap(double nowMs);
     void savePad(int x, int y, double nowMs);
+    // modulation (manual 7.x)
+    ModLane& lane(int l) { return seq().pat().lanes[(size_t) l]; }
+    const ModLane& lane(int l) const { return seq().pat().lanes[(size_t) l]; }
+    int selLane() const { return modLaneSel[(size_t) sel]; }
+    void modPadDown(int x, int y, double nowMs);
+    void editMod(int knob, int delta, double nowMs);
+    void modKnobTap(int knob, double nowMs);
+    bool longPressKnob(int knob, double nowMs);
+    void renderMod(Frame& f) const;
+    void renderModDisplay(Frame& f) const;
+    void editLfo(int knob, int delta);
+    void editMatrix(int knob, int delta);
+    int quickDest(int knob) const;
+    void quickAssignSource();
+    void editQuick(int knob, int delta, double nowMs);
     void renderSave(Frame& f, double nowMs) const;
     void editRandPerf(int knob, int delta, double nowMs);
     void flowStep(int x, int y, double nowMs);
@@ -247,6 +262,12 @@ private:
     double projConfirmUntil = 0.0;
     struct LastTap { int x = -1, y = -1; double ms = -1e9; } lastSaveTap;
     uint32_t templateMask = 0;
+    std::array<int, kNumSeqs> modLaneSel {}, modBank {}, modPg {};
+    bool modSettings = false;
+    int modParam = 0, mapSel = 0, mapParam = 0;
+    std::unique_ptr<ModLane> laneClip;
+    int qaDest = 0, qaSrc = 0, qaAmt = 50, qaOff = 0; Menu qaReturn = Menu::None; int qaReturnPage = 0;
+    struct LastTap modLastTap;
     std::vector<Job> jobs;
 public:
     bool hasSnapshot() const { return snapshot != nullptr; }

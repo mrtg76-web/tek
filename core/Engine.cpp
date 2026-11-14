@@ -12,6 +12,7 @@ Engine::Engine(Project& p) : proj(p) {
     due.reserve(4096);
     pendingPat.fill(-1);
     sentPc.fill(-1);
+    for (auto& a : mapVal) a.fill(-1);
     recQueue.reserve(256);
     capture.reserve(160);
     recWritten.fill(-1e9);
@@ -67,6 +68,12 @@ double Engine::trackStepLength(int s, int t) const {
         return divisionBeats(q.pat().mat.tracks[(size_t) t].lanes[kLaneTrig].div) / (1.0 + q.timeBend / 1000.0);
     if (q.mode == Mode::Domino) return stepLength(q, q.pat().tracks[1]);
     if (q.mode == Mode::Player) return 0.25 / (1.0 + q.timeBend / 1000.0); // tick based: fixed 1/16 windows
+    const int dm = modSum[(size_t) s][MD_Div] / 32; // division modulation: +-4 steps in the division list
+    if (dm != 0) {
+        const auto& tr = q.pat().tracks[(size_t) t];
+        const Division d = (Division) std::clamp((int) tr.div + dm, 0, (int) Division::Count - 1);
+        return divisionBeats(d) / (1.0 + q.timeBend / 1000.0);
+    }
     return stepLength(q, q.pat().tracks[(size_t) t]);
 }
 
@@ -260,7 +267,24 @@ void Engine::scheduleStep(int s, int t, double grid, double L, double bpm) {
     { const uint32_t Lq = (uint32_t) std::clamp(std::lround(L * 960.0), 0L, 0xffffffL); // step length rides in ch/d1/d2
       push({grid, 2, (uint8_t) (Lq & 255), (uint8_t) ((Lq >> 8) & 255), (uint8_t) (Lq >> 16), (uint8_t) s, (uint8_t) t, (int16_t) pos}); }
 
-    const Step& st = tr.steps[(size_t) pos];
+    // modulation of this step works on a copy: the pattern is never changed (manual 7.9 internal destinations)
+    Step stMod = tr.steps[(size_t) pos];
+    {
+        const auto& m = modSum[(size_t) s];
+        if (t == 0) { lastStepPpq[(size_t) s] = grid; lastStepSample[(size_t) s] = sampleClock; }
+        if (m[MD_Vel]) stMod.velocity = (uint8_t) std::clamp(stMod.velocity + m[MD_Vel], 1, 127);
+        if (m[MD_Pitch] && q.mode != Mode::Multi) for (int k = 0; k < stMod.numNotes; ++k) stMod.notes[(size_t) k] = (int8_t) std::clamp(stMod.notes[(size_t) k] + m[MD_Pitch] / 9, -120, 120);
+        if (m[MD_Oct] && q.mode != Mode::Multi) stMod.octave = (int8_t) std::clamp(stMod.octave + (int) std::lround(m[MD_Oct] / 32.0), -9, 9);
+        if (m[MD_Gate] && stMod.gate < kGateLegato) stMod.gate = (uint8_t) std::clamp(stMod.gate + m[MD_Gate] * stMod.gate / 127, 2, 99);
+        if (m[MD_Rept]) stMod.repeats = (uint8_t) std::clamp(stMod.repeats + m[MD_Rept] * 15 / 127, 1, 15);
+        if (m[MD_Trig] && stMod.trig.type == TrigType::Prob) stMod.trig.a = (uint8_t) std::clamp(stMod.trig.a + m[MD_Trig] * 100 / 127, 0, 100);
+        if (m[MD_ChType]) stMod.chordType = (uint8_t) std::clamp(stMod.chordType + m[MD_ChType] * kNumChordTypes / 254, 0, kNumChordTypes - 1);
+        if (m[MD_ChVoic]) stMod.voicing = (uint8_t) std::clamp(stMod.voicing + m[MD_ChVoic] * kNumVoicings / 254, 0, kNumVoicings - 1);
+        if (m[MD_ChSpread]) stMod.spread = (uint8_t) std::clamp(stMod.spread + m[MD_ChSpread] * 6 / 127, 0, 6);
+        if (m[MD_ChStrum]) stMod.strum = (int8_t) std::clamp(stMod.strum + m[MD_ChStrum] * 100 / 127, -100, 100);
+        if (m[MD_AccAmt]) stMod.accAmt = (int8_t) std::clamp(stMod.accAmt + m[MD_AccAmt] / 5, -24, 24);
+    }
+    const Step& st = stMod;
     const bool parity = (r.nextIdx % 2) != 0; // nextIdx already refers to this step here
     const int64_t counter = r.counter;
     r.counter++;
@@ -848,6 +872,7 @@ void Engine::runArps(double from, double to, double bpm) {
 
 void Engine::process(const Transport& host, int numSamples, const std::vector<MidiIn>& in, std::vector<MidiOut>& out) {
     // ---- MIDI input: transposition (manual 3.15 "Trnsp"), otherwise the selected sequencer's keyboard
+    for (auto& m : in) modInput(m.status, m.data1, m.data2, out); // mod matrix (manual 7.5 / 7.7)
     for (auto& m : in) {
         const int type = m.status & 0xF0;
         const bool on = type == 0x90 && m.data2 > 0, off = type == 0x80 || (type == 0x90 && m.data2 == 0);
@@ -906,6 +931,9 @@ void Engine::process(const Transport& host, int numSamples, const std::vector<Mi
     const double blockEnd = tp.ppq + numSamples * ppqPerSample;
     applyGlobals(out);
     processRecording(tp.ppq, blockEnd, tp.bpm, tp.playing, numSamples, ppqPerSample, out);
+    computeMod(tp.ppq, tp.bpm, tp.playing, out);
+    applySeqMods();
+    struct ModRestore { Engine& e; ~ModRestore() { e.restoreSeqMods(); } } modRestore { *this };
 
     if (!tp.playing) {
         if (wasPlaying) { stopAll(out, 0); for (auto& a : arpRt) a.nextGrid = -1.0; }
