@@ -19,7 +19,7 @@ static const char* kTekWebPage = R"TEK(<!DOCTYPE html>
   #stage { position: absolute; left: 0; top: 0; width: 1366px; height: 1024px; transform-origin: 0 0; }
   .panel { position: absolute; left: 6px; top: 6px; width: 1354px; height: 1012px; background: #1b1c1e; border-radius: 18px; }
   .el { position: absolute; box-sizing: border-box; }
-  .pad { border-radius: 8px; background: #26282b; }
+  .pad { border-radius: 8px; background: #26282b; contain: layout paint; }
   .btn { border-radius: 9px; background: #2b2d30; color: #fff; text-align: center; overflow: hidden; }
   .btn .l { font-weight: 700; font-size: 15px; margin-top: 14px; }
   .btn .s { font-size: 12px; color: #46d6c6; margin-top: 2px; }
@@ -141,9 +141,11 @@ static const char* kTekWebPage = R"TEK(<!DOCTYPE html>
   const url = location.host;
   let rtt = -1, worst = 0, worstAt = 0;
   function setStatus() {
-    const net = rtt < 0 ? '' : ' &nbsp; ping ' + Math.round(rtt) + ' ms (max ' + Math.round(worst) + ')';
-    status.innerHTML = 'TEK touch &nbsp; ' + (connected ? '<b>connected</b>' : '<b class="off">connecting…</b>') +
-      ' &nbsp; ' + url + net + ' &nbsp;·&nbsp; hold a pad + turn a knob, SHIFT + tap';
+    const net = rtt < 0 ? '' : ' &nbsp; ping ' + Math.round(rtt) + ' (max ' + Math.round(worst) + ')';
+    const pd = typeof pred === 'undefined' ? '' : ' &nbsp; pred ' + (pred && offset !== null ? 'ON' : 'off');
+    const ui = typeof uiWorst === 'undefined' ? '' : ' &nbsp; ui max ' + Math.round(uiWorst);
+    status.innerHTML = 'TEK v3b5 &nbsp; ' + (connected ? '<b>connected</b>' : '<b class="off">connecting…</b>') +
+      ' &nbsp; ' + url + net + pd + ui;
   }
   // keep-alive: small upstream packets keep the Wi-Fi radios awake and measure the round trip
   setInterval(() => send('k ' + Math.round(performance.now())), 100);
@@ -177,7 +179,7 @@ static const char* kTekWebPage = R"TEK(<!DOCTYPE html>
   const prev = {};
   const txt = (id, v) => { if (prev[id] !== v) { prev[id] = v; document.getElementById(id).textContent = v; } };
   const padC = new Array(128).fill(''), ledC = new Array(37).fill(''), progC = new Array(16).fill('');
-  let base = '', baseProg = 0, pred = null, animating = false;
+  var pred = null; let base = '', baseProg = 0, animating = false;
   const lit = (c) => {
     if (c === '000000' || c === '3b3e43' || c === '34373b') return '5a5d63';
     let o = ''; for (let k = 0; k < 3; k++) { const v = parseInt(c.substr(k * 2, 2), 16); o += Math.round(v + (255 - v) * 0.45).toString(16).padStart(2, '0'); }
@@ -213,6 +215,11 @@ static const char* kTekWebPage = R"TEK(<!DOCTYPE html>
       pads[i].style.boxShadow = c === '000000' ? 'none' : '0 0 10px ' + hex(c) + '55';
     }
   }
+  var uiWorst = 0; let uiLast = 0, uiAt = 0;
+  (function uiMon(t) {
+    if (uiLast) { const g = t - uiLast; if (g > uiWorst || t - uiAt > 10000) { uiWorst = g; uiAt = t; } }
+    uiLast = t; requestAnimationFrame(uiMon);
+  })(0);
   function tick() { if (!pred) { animating = false; return; } paint(); requestAnimationFrame(tick); }
   function draw(t) {
     const f = t.split('\n');
