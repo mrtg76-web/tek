@@ -70,6 +70,7 @@ private:
     std::unique_ptr<juce::FileChooser> chooser;
     std::string lastSaved;   // state at the last Ableton save / load
     int templateScan = 0;
+    double portClockMs = -1.0; // steady timestamp clock for the virtual port
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(TekProcessor)
 };

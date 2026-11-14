@@ -146,7 +146,7 @@ static const char* kTekWebPage = R"TEK(<!DOCTYPE html>
     const net = rtt < 0 ? '' : ' &nbsp; ping ' + Math.round(rtt) + ' (max ' + Math.round(worst) + ')';
     const pd = typeof pred === 'undefined' ? '' : ' &nbsp; pred ' + (pred && offset !== null ? 'ON' : 'off');
     const ui = typeof uiWorst === 'undefined' ? '' : ' &nbsp; ui max ' + Math.round(uiWorst);
-    status.innerHTML = 'TEK v1.0 &nbsp; ' + (connected ? '<b>connected</b>' : '<b class="off">connecting…</b>') +
+    status.innerHTML = 'TEK v1.0.1 &nbsp; ' + (connected ? '<b>connected</b>' : '<b class="off">connecting…</b>') +
       ' &nbsp; ' + url + net + pd + ui;
   }
   // keep-alive: small upstream packets keep the Wi-Fi radios awake and measure the round trip

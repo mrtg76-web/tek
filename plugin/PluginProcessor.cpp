@@ -83,8 +83,18 @@ void TekProcessor::processBlock(juce::AudioBuffer<float>& audio, juce::MidiBuffe
             echoHead = (echoHead + 1) % (int) echoes.size();
         }
     }
-    if (toPort && !portBuffer.isEmpty())
-        virtualOut->sendBlockOfMessages(portBuffer, juce::Time::getMillisecondCounterHiRes(), sampleRate);
+    // Port timing: hosts call processBlock unevenly (bursts, then gaps), so "now" is a poor timestamp and makes the
+    // tempo limp. Instead a steady clock advances by exactly one block per call and is pulled slowly towards
+    // real time; a small fixed latency keeps every message in the future so the send thread can place it exactly.
+    if (toPort) {
+        const double blockMs = n * 1000.0 / sampleRate;
+        const double latency = juce::jlimit(8.0, 60.0, 2.0 * blockMs + 4.0);
+        const double target = nowMs + latency;
+        if (portClockMs < 0.0 || std::abs(portClockMs - target) > 3.0 * latency + 30.0) portClockMs = target; // start or long gap
+        else portClockMs += (target - portClockMs) * 0.01;                                                    // follow drift gently
+        if (!portBuffer.isEmpty()) virtualOut->sendBlockOfMessages(portBuffer, portClockMs, sampleRate);
+        portClockMs += blockMs;
+    } else portClockMs = -1.0;
 }
 
 bool TekProcessor::isEcho(uint8_t st, uint8_t d1, uint8_t d2, double nowMs) {
