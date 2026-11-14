@@ -139,9 +139,19 @@ static const char* kTekWebPage = R"TEK(<!DOCTYPE html>
   // ---------------------------------------------------------------- connection
   let ws = null, connected = false;
   const url = location.host;
+  let rtt = -1, worst = 0, worstAt = 0;
   function setStatus() {
+    const net = rtt < 0 ? '' : ' &nbsp; ping ' + Math.round(rtt) + ' ms (max ' + Math.round(worst) + ')';
     status.innerHTML = 'TEK touch &nbsp; ' + (connected ? '<b>connected</b>' : '<b class="off">connecting…</b>') +
-      ' &nbsp; ' + url + ' &nbsp;·&nbsp; hold a pad + turn a knob, hold SHIFT + tap, drag pad → pad = tie';
+      ' &nbsp; ' + url + net + ' &nbsp;·&nbsp; hold a pad + turn a knob, SHIFT + tap';
+  }
+  // keep-alive: small upstream packets keep the Wi-Fi radios awake and measure the round trip
+  setInterval(() => send('k ' + Math.round(performance.now())), 100);
+  setInterval(() => { if (performance.now() - worstAt > 10000) worst = rtt; setStatus(); }, 1000);
+  function pong(t) {
+    const now = performance.now();
+    rtt = now - parseInt(t, 10);
+    if (rtt >= worst) { worst = rtt; worstAt = now; }
   }
   function send(m) { if (ws && ws.readyState === 1) ws.send(m); }
   function connect() {
@@ -149,7 +159,7 @@ static const char* kTekWebPage = R"TEK(<!DOCTYPE html>
     ws.onopen = () => { connected = true; setStatus(); };
     ws.onclose = () => { connected = false; setStatus(); releaseAll(); setTimeout(connect, 1000); };
     ws.onerror = () => { try { ws.close(); } catch (e) {} };
-    ws.onmessage = (ev) => { pending = ev.data; if (!raf) raf = requestAnimationFrame(flush); };
+    ws.onmessage = (ev) => { if (ev.data.charCodeAt(0) === 75) { pong(ev.data.substr(2)); return; } pending = ev.data; if (!raf) raf = requestAnimationFrame(flush); };
   }
   setStatus(); connect();
 

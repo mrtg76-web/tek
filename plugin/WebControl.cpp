@@ -165,6 +165,10 @@ private:
                     pong.insert(pong.end(), payload.begin(), payload.begin() + (long) std::min<size_t>(payload.size(), 125));
                     sendAll(*sock, pong.data(), (int) pong.size());
                 }
+                if (op == 1 && payload.size() > 2 && payload[0] == 'k' && payload[1] == ' ') { // keep-alive: echo right away
+                    if (!sendText("K " + juce::String::fromUTF8(payload.data() + 2, (int) payload.size() - 2))) return;
+                    continue;
+                }
                 if (op == 1) owner.handleMessage(juce::String::fromUTF8(payload.data(), (int) payload.size()));
                 continue; // drain input before rendering
             }
