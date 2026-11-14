@@ -171,7 +171,7 @@ private:
             // outgoing frame
             const double now = juce::Time::getMillisecondCounterHiRes();
             if (now < nextSend) continue;
-            nextSend = std::max(nextSend + kFrameMs, now);
+            nextSend = juce::jmax(nextSend + kFrameMs, now);
             {
                 const juce::SpinLock::ScopedLockType sl(owner.proc.lock);
                 owner.proc.controller().render(frame, now);
