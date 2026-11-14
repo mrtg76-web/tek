@@ -148,6 +148,11 @@ uint8_t chMxChannel(int base, int chMx, int rankLow, int count) {
     return (uint8_t) ((base + rank % span) % 16);
 }
 
+const char* arpTypeLabel(int t) {
+    static const char* l[kNumArpTypes] = {"OFF", "Up", "Down", "Up/Dn", "2Up2Dn", "AltIn", "AltOut", "AltIO", "Pinky", "Thumb", "Random", "RndOnce", "Order"};
+    return l[std::clamp(t, 0, kNumArpTypes - 1)];
+}
+
 const char* punchInLabel(int v) {
     static const char* l[] = {"Glob","OFF","P.End","Beat","1/2B","Bar","2Bar","4Bar","8Bar"};
     return (v >= 0 && v < 9) ? l[v] : "?";
@@ -231,6 +236,12 @@ std::string serialize(const Project& p) {
           << (int) q.nudgeMs << ' ' << (int) q.timeBend << ' ' << (int) q.active << ' ' << (int) q.muted << ' '
           << (int) q.curPattern << ' ' << (int) q.groove << ' ' << q.grooveAccent << ' ' << q.grooveTime << ' '
           << (int) q.grooveOffset << ' ' << (int) q.grooveLen << ' ' << (int) q.grooveRand << '\n';
+        {
+            const auto& a = q.arp;
+            o << "ARP " << s << ' ' << (int) a.type << ' ' << (int) a.seqType << ' ' << (int) a.octV << ' ' << (int) a.gate << ' ' << (int) a.div << ' '
+              << (int) a.accent << ' ' << (int) a.len << ' ' << (int) a.puls << ' ' << (int) a.rept << ' ' << (int) a.gtime << ' ' << (int) a.groove << ' '
+              << (int) a.reset << ' ' << (int) a.latch << ' ' << (int) a.hold << ' ' << (int) q.kbVel << ' ' << (int) q.kbBase << '\n';
+        }
         o << "SQ2 " << s << ' ' << (int) q.bassMode << ' ' << (int) q.chMx << ' ' << (int) q.voice << ' ' << (int) q.harm << '\n';
         for (int pi = 0; pi < kNumPatterns; ++pi) {
             const auto& pat = q.patterns[(size_t) pi];
@@ -286,6 +297,7 @@ std::string serialize(const Project& p) {
                   << (int) tr.div << ' ' << (int) tr.rndDiv << ' ' << (int) tr.channel << ' ' << (int) tr.baseNote << ' '
                   << (int) tr.swing << ' ' << (int) tr.muted << ' ' << (int) tr.defVel << ' ' << (int) tr.defGate << ' '
                   << (int) tr.defRepeats << '\n';
+ if (tr.hasLoop() || tr.loopRate != 255) o << "TL " << s << ' ' << pi << ' ' << t << ' ' << (int) tr.loopStart << ' ' << (int) tr.loopEnd << ' ' << (int) tr.loopRate << '\n';
                 if (tr.accTrackMode || tr.accMax != 7 || tr.accMin) o << "TA " << s << ' ' << pi << ' ' << t << ' ' << (int) tr.accTrackMode << ' ' << (int) tr.accMax << ' ' << (int) tr.accMin << '\n';
                 for (int i = 0; i < kMaxSteps; ++i) {
                     const auto& st = tr.steps[(size_t) i];
@@ -368,6 +380,21 @@ bool deserialize(const std::string& str, Project& p) {
             st.accAmt = clampv<int8_t>(at(4), -24, 24); st.accMode = clampv<uint8_t>(at(5), 0, 3);
             st.accMax = clampv<int8_t>(at(6), 0, 24); st.accMin = clampv<int8_t>(at(7), -24, 0);
             st.accTarget = clampv<uint8_t>(at(8), 0, 2); st.accPctMode = clampv<uint8_t>(at(9), 0, 1); st.accProb = clampv<uint8_t>(at(10), 0, 100);
+        } else if (tag == "TL" && v.size() >= 6) {
+            int s = at(0), pi = at(1), t = at(2);
+            if (s < 0 || s >= kNumSeqs || pi < 0 || pi >= kNumPatterns || t < 0 || t >= kNumTracks) continue;
+            auto& tr = p.seqs[(size_t) s].patterns[(size_t) pi].tracks[(size_t) t];
+            tr.loopStart = clampv<uint8_t>(at(3), 0, 255); tr.loopEnd = clampv<uint8_t>(at(4), 0, 255); tr.loopRate = clampv<uint8_t>(at(5), 0, 255);
+            if (tr.hasLoop() && (tr.loopStart >= kMaxSteps || tr.loopEnd >= kMaxSteps || tr.loopEnd < tr.loopStart)) tr.loopStart = tr.loopEnd = 255;
+        } else if (tag == "ARP" && v.size() >= 17) {
+            int s = at(0); if (s < 0 || s >= kNumSeqs) continue;
+            auto& q = p.seqs[(size_t) s]; auto& a = q.arp;
+            a.type = clampv<uint8_t>(at(1), 0, kNumArpTypes - 1); a.seqType = clampv<uint8_t>(at(2), 0, kNumArpTypes - 1);
+            a.octV = clampv<int8_t>(at(3), -7, 7); a.gate = clampv<uint8_t>(at(4), 2, 100); a.div = clampv<Division>(at(5), 0, (int) Division::Count - 1);
+            a.accent = clampv<int8_t>(at(6), -100, 100); a.len = clampv<uint8_t>(at(7), 1, 32); a.puls = clampv<uint8_t>(at(8), 1, 32);
+            a.rept = clampv<uint8_t>(at(9), 0, 16); a.gtime = clampv<int8_t>(at(10), -100, 100); a.groove = clampv<uint8_t>(at(11), 1, kNumGrooves);
+            a.reset = clampv<uint8_t>(at(12), 0, 3); a.latch = at(13) != 0; a.hold = at(14) != 0;
+            q.kbVel = clampv<uint8_t>(at(15), 1, 127); q.kbBase = clampv<int8_t>(at(16), -2, 4);
         } else if (tag == "TA" && v.size() >= 6) {
             int s = at(0), pi = at(1), t = at(2);
             if (s < 0 || s >= kNumSeqs || pi < 0 || pi >= kNumPatterns || t < 0 || t >= kNumTracks) continue;

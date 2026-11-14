@@ -288,5 +288,34 @@ int runControllerTests() {
         r.hold(Btn::Shift); r.c.encoderTurn(2, 1, r.t); r.release(Btn::Shift);
         CCHECK(r.p->seqs[0].harm == -1);
     }
+    { // keyboard view, arp menu, loop view
+        Rig r;
+        r.press(Btn::Arp);                     // mono: opens the arp menu + keyboard view
+        r.c.encoderTurn(0, 1, r.t);            // type Up
+        CCHECK(r.p->seqs[0].arp.type == kArpUp);
+        r.c.padDown(0, 7, r.t);                // C0 key
+        r.c.padDown(4, 7, r.t);                // E0
+        int notes[8];
+        CCHECK(r.e.arpNotes(0, notes, 8) == 2 && notes[0] == 24);
+        Frame f; r.c.render(f, r.t);
+        CCHECK(f.line1.rfind("Keyboard Arp", 0) == 0);
+        r.c.padUp(0, 7, r.t); r.c.padUp(4, 7, r.t);
+        CCHECK(r.e.arpNotes(0, notes, 8) == 0);
+        r.press(Btn::Arp);                     // close the menu
+        r.c.render(f, r.t);
+        CCHECK(f.line2 == "rows = octaves");
+        r.press(Btn::Keyboard);                // back to the sequencer
+        // loop view: hold INIT, press END, then two pads
+        r.hold(Btn::Init); r.press(Btn::End); r.release(Btn::Init);
+        r.c.padDown(2, 0, r.t); r.c.padDown(5, 0, r.t); r.c.padUp(5, 0, r.t); r.c.padUp(2, 0, r.t);
+        CCHECK(r.tr0().loopStart == 2 && r.tr0().loopEnd == 5);
+        r.c.encoderTurn(0, 1, r.t);            // Len x2
+        CCHECK(r.tr0().loopEnd == 9);
+        r.press(Btn::Init);                    // clear
+        CCHECK(!r.tr0().hasLoop());
+        r.press(Btn::Back);
+        r.tap(1, 7);                           // normal editing again
+        CCHECK(r.tr0().steps[1].active);
+    }
     return cfail;
 }

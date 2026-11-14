@@ -1,8 +1,34 @@
-# TEK — 8 kanallı performans sequencer'ı (Faz 1 + Faz 2 tamam)
+# TEK — 8 kanallı performans sequencer'ı (Faz 1–2 tamam, Faz 3a: Keyboard, Loop, Arp)
 
 TEK, OXI ONE MKII kılavuzunu temel alan bir VST3/AU sequencer plugin'i. Ses üretmiyor, MIDI üretiyor. Ableton'daki synth'leri, drum rack'leri ve harici cihazları sürüyor.
 
-## iPad dokunmatik controller (yeni)
+## Faz 3a: Keyboard, Loop, Arpeggiator (yeni)
+
+**Keyboard görünümü** (KEYBOARD tuşu: dokun = aç/kapa, basılı tut = geçici): Grid bir klavyeye dönüşür.
+- **Düzen:** Satırlar oktav (en alt = temel oktav), 1–12. sütunlar C'den B'ye notalar. Notalar anında çalar; Ableton kayıttayken MIDI olarak kaydedilir.
+- **Renkler:** Ölçek dışı notalar kırmızı, kök nota parlak. Kromatik ölçekte beyaz tuşlar renkli, siyahlar sönük.
+- **Multitrack'te drum pad'leri:** Satır = iz, sütun = velocity.
+- **Knob'lar:** Vel / Bend (pitch bend) / At (aftertouch) / Base (temel oktav C-2…C4). Knob'a dokunmak sıfırlar.
+- **Akor tanıma:** Basılı notaların akor adı ekranda görünür (Cmaj, Am7, G/B…).
+- **Harici klavye:** Ableton'da TEK'in track'ine gelen MIDI notaları seçili sequencer'ın klavyesine gider, arp açıksa arpeggiator'ı besler. Trnsp atanmış kanallar hariç.
+- **Shift + KEYBOARD = Preview:** Grid'e nota girerken o notayı kısa bir süre duyarsın.
+
+**Loop** (Mono, Poly, Chord, Multitrack): Pattern'in içinde ayrı bir döngü kurar.
+- **Kurma:** INIT'i basılı tut ve END'e bas, loop görünümü açılır. Başlangıç pad'ini basılı tutup bitiş pad'ine dokun. Döngü mor görünür, INIT/END yanıp söner.
+- **Knob'lar:** Len (×2 / ÷2) / Pos (kaydır, Shift = loop uzunluğu kadar) / Rate (loop'a ayrı division) / Track (multitrack).
+- **Temizleme ve çıkış:** INIT veya END'e dokunmak loop'u temizler. BACK görünümden çıkar.
+
+**Arpeggiator** (ARP tuşu):
+- **Keyboard arp** (Mono, Multitrack, Stochastic, Matriceal ve Keyboard görünümü): ARP'a basınca arp menüsü ve klavye açılır. Type'ı seçip klavyede notaları basılı tut. Ableton çalarken notalar arpejlenir.
+- **Sequencer arp** (Poly ve Chord, grid görünümündeyken): Her step'in notaları/akoru o step boyunca arpejlenir.
+- **Menü (PAGE ile 3 sayfa):**
+  - Sayfa 1: **Type** (Up, Down, Up/Dn, 2Up2Dn, AltIn, AltOut, AltIO, Pinky, Thumb, Random, RndOnce, Order) / **OctV** (±7 oktav) / **Gate** / **Div**.
+  - Sayfa 2: **Accnt** (groove velocity profili) / **Len** / **Puls** / **Rept** (Euclid: Len adımda Puls kadar nota, her darbeden sonra Rept kadar tekrar).
+  - Sayfa 3: **GTim** (groove zamanlaması) / **Grov** (groove şablonu) / **Reset** (yeni nota gelince pozisyonu ve/veya groove'u başa al) / **Latch**.
+- **Shift + ARP = Hold:** Bıraktığın notalar çalmaya devam eder, yeni akor basınca değişir. Latch açıkken notalar üst üste eklenir; latch'li bir notaya tekrar dokunmak onu çıkarır.
+- **Kısayol:** Menünün 1. sayfasında knob 1'e dokunmak arp'ı son seçilen tiple açıp kapatır.
+
+## iPad dokunmatik controller
 
 TEK, açıldığı bilgisayarda küçük bir web sunucusu başlatır. iPad, iPhone veya başka bir tablet aynı Wi-Fi ağındaysa TEK'i dokunmatik olarak, çoklu dokunmayla kontrol edebilir.
 

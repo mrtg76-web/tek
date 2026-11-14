@@ -117,6 +117,10 @@ struct Track {
     uint8_t defVel = 75, defGate = 50, defRepeats = 1;
     uint8_t accTrackMode = 0;      // AcmM: 0 Step (limits per step), 1 Trck (limits below for every step)
     int8_t accMax = 7, accMin = 0;
+    // loop inside the pattern (manual 5.2): 255 = no loop
+    uint8_t loopStart = 255, loopEnd = 255;
+    uint8_t loopRate = 255;        // 255 = same division as the track, else Division
+    bool hasLoop() const { return loopStart != 255 && loopEnd != 255; }
     int length() const { return (int) end - (int) start + 1; }
 };
 
@@ -189,6 +193,24 @@ struct Pattern {
     bool isEmpty() const;
 };
 
+// Arpeggiator (manual 5.3). One settings block per sequencer: `type` drives the keyboard arp,
+// `seqType` the poly / chord sequencer arp (step notes are arpeggiated).
+enum ArpType { kArpOff = 0, kArpUp, kArpDown, kArpUpDown, kArp2Up2Down, kArpAltIn, kArpAltOut, kArpAltInOut,
+               kArpPinky, kArpThumb, kArpRandom, kArpRandOnce, kArpOrder, kNumArpTypes };
+const char* arpTypeLabel(int t);
+struct ArpSettings {
+    uint8_t type = 0, seqType = 0;
+    int8_t octV = 0;               // -7..7
+    uint8_t gate = 50;             // 2..100
+    Division div = Division::Sixteenth;
+    int8_t accent = 0;             // -100..100 % (groove velocity profile)
+    uint8_t len = 16, puls = 16, rept = 0; // euclidean
+    int8_t gtime = 0;              // -100..100 % groove timing
+    uint8_t groove = 1;            // 1..kNumGrooves
+    uint8_t reset = 3;             // 0 Off, 1 aPos, 2 Grve, 3 All
+    bool latch = false, hold = false;
+};
+
 struct Sequencer {
     Mode mode = Mode::Mono;
     uint8_t channel = 0;           // 0..15 (mono/poly)
@@ -207,7 +229,10 @@ struct Sequencer {
     uint8_t bassMode = 0;          // chord mode bass note: 0 Off, 1 On (same channel), 2..17 = channel 1..16
     uint8_t chMx = 0;              // channel multiplex: 0 Off, 1..7 = 2..8 Lo, 8..14 = 2..8 Hi (manual 6.14)
     int8_t harm = -1;              // harmonizer: -1 off, 0..7 = leader sequencer (scale shown as HARMON)
-    uint8_t voice = 1;             // domino: 0 Mono, 1 Poly (tracks[0] = 32 note steps, tracks[1] = 64 trigger steps)
+    uint8_t voice = 1;             // domino: 0 Mono, 1 Poly
+    ArpSettings arp;
+    uint8_t kbVel = 75;            // keyboard view velocity
+    int8_t kbBase = 0;             // keyboard base octave -2..4 (C0 default) (tracks[0] = 32 note steps, tracks[1] = 64 trigger steps)
     bool active = true;            // inactive = transport stopped for this seq
     bool muted = false;            // muted = runs but silent
     uint8_t curPattern = 0;

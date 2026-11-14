@@ -38,6 +38,15 @@ public:
     void panic();                               // all notes off on every channel at the next block
     void resetSeq(int seq);                     // restart a sequencer from its first step
 
+    // --- live playing (keyboard view, MIDI input, preview); call with the project lock held ---
+    void liveNote(int ch, int note, int vel, bool on);       // immediate note on / off
+    void previewNote(int ch, int note, int vel);             // short audition note
+    void liveRaw(uint8_t status, uint8_t d1, uint8_t d2);    // pitch bend, pressure, CC...
+    void arpKey(int seq, int note, bool down);               // keyboard arp input
+    void arpClear(int seq);
+    int arpNotes(int seq, int* out, int max) const;          // currently held / latched arp notes
+    int kbTarget = 0;                                        // sequencer receiving MIDI input notes (selected seq)
+
     std::atomic<bool> flowHeld { false };
     std::array<uint8_t, kNumSeqs> soloMask {};  // multitrack solo bits (not saved)
 
@@ -106,6 +115,8 @@ private:
     void playDomino(int s, double grid, double L, double bpm);
     void playSaga(int s, double grid, double L, double bpm);
     void playClip(int s, double grid, double L, double bpm);
+    void runArps(double from, double to, double bpm);
+    int buildArpPattern(const ArpSettings& a, int type, const int* notes, int n, int* out, int seqIdx);
     double trackStepLength(int s, int t) const;
     int accNext(const Step& st, const Track& tr, TrackRt& r, int idx, bool advance);
     int degPitch(const Sequencer& q, int s, int base, int degree) const;
@@ -124,6 +135,20 @@ private:
     std::array<int, kNumSeqs> transposeOffset {};
     std::array<std::array<int, 8>, kNumSeqs> harmNotes {};   // last chord played by each (leader) sequencer
     std::array<int, kNumSeqs> harmCount {};
+    struct LiveEv { uint8_t st, d1, d2; };
+    std::vector<LiveEv> liveQueue;
+    struct PreviewOff { int ch, note; int64_t samplesLeft; };
+    std::vector<PreviewOff> previewOffs;
+    struct ArpRt {
+        int held[32] {}; int nHeld = 0;     // in press order
+        int down = 0;                       // physically held keys
+        bool changed = false;
+        int64_t tick = 0, grooveBase = 0;
+        int pos = 0, repLeft = 0;
+        double nextGrid = -1.0;
+        int randOrder[512] {}; int nRand = 0; uint32_t sig = 0;
+    };
+    std::array<ArpRt, kNumSeqs> arpRt;
     std::array<std::array<TrackRt, kNumTracks>, kNumSeqs> rt;
     std::vector<Ev> queue;
     std::vector<Ev> due;

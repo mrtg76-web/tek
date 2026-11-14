@@ -48,8 +48,8 @@ public:
     void showMessage(const std::string& m, double nowMs) { msg(m, nowMs, 2500.0); }
 
 private:
-    enum class Menu { None, Setup, TrackM, StepM, Nudge, Bend, Groove };
-    enum class GridMode { Steps, Column, Load };
+    enum class Menu { None, Setup, TrackM, StepM, Nudge, Bend, Groove, Arp };
+    enum class GridMode { Steps, Column, Load, Keys };
 
     struct HeldPad { int x, y; double downMs; bool consumed; };
 
@@ -99,7 +99,16 @@ private:
     void renderDominoDisplay(Frame& f) const;
     void renderSaga(Frame& f) const;
     void renderPlayer(Frame& f) const;
+    void keyPad(int x, int y, bool down, double nowMs);
+    int keyNote(int x, int y) const;
+    void renderKeys(Frame& f) const;
+    void editArp(int knob, int delta, double nowMs);
+    void loopPad(int x, int y, double nowMs);
+    void editLoop(int knob, int delta, double nowMs);
+    void preview(int note, int ch, int vel);
+    bool seqArpContext() const { return (seq().mode == Mode::Poly || seq().mode == Mode::Chord) && grid != GridMode::Keys; }
     static void editAcc(Step& st, int page, int knob, int delta);
+    static std::string chordFromNotes(const int* notes, int n);
     std::string scaleText() const;
     std::string rootText() const;
     void renderSagaDisplay(Frame& f) const;
@@ -181,6 +190,14 @@ private:
     double messageUntil = 0.0;
     std::vector<double> tapTimes;
     bool midiLoadReq = false;
+    bool previewOn = false;
+    bool loopView = false;
+    int loopAnchor = -1;
+    int kbBend = 0, kbAt = 0;
+    std::array<uint8_t, kNumSeqs> lastArpType {};
+    struct KeyHeld { int x, y, note, ch; bool arp; };
+    std::vector<KeyHeld> keyHeld;
+    double keyboardDownMs = 0.0;
     int midiLoadSeq = 0;
 };
 

@@ -7,6 +7,8 @@ namespace tek {
 
 Engine::Engine(Project& p) : proj(p) {
     queue.reserve(16384);
+    liveQueue.reserve(512);
+    previewOffs.reserve(64);
     due.reserve(4096);
     pendingPat.fill(-1);
     resetPending.fill(false);
@@ -48,7 +50,7 @@ int Engine::positionFor(Dir dir, int start, int end, int64_t c) {
 }
 
 double Engine::stepLength(const Sequencer& q, const Track& tr) const {
-    double L = divisionBeats(tr.div);
+    double L = divisionBeats(tr.hasLoop() && tr.loopRate != 255 ? (Division) tr.loopRate : tr.div);
     double bend = 1.0 + q.timeBend / 1000.0;
     return L / bend;
 }
@@ -214,18 +216,20 @@ void Engine::scheduleStep(int s, int t, double grid, double L, double bpm) {
         if (blk != r.resetBlock) { r.resetBlock = blk; r.counter = 0; r.pos = -1; }
     }
 
-    const int len = tr.length();
+    // a loop (manual 5.2) replaces the pattern range while it is set
+    const int rs = tr.hasLoop() ? tr.loopStart : tr.start, re = tr.hasLoop() ? tr.loopEnd : tr.end;
+    const int len = re - rs + 1;
     int pos;
-    if (tr.dir == Dir::Random) pos = tr.start + (int) (rand32() % (uint32_t) std::max(1, len));
+    if (tr.dir == Dir::Random) pos = rs + (int) (rand32() % (uint32_t) std::max(1, len));
     else if (tr.dir == Dir::Drunk) {
-        if (r.pos < tr.start || r.pos > tr.end) pos = tr.start;
+        if (r.pos < rs || r.pos > re) pos = rs;
         else {
             uint32_t x = rand32() % 4;
             pos = r.pos + (x < 2 ? 1 : (x == 2 ? 0 : -1));
-            if (pos > tr.end) pos = tr.start;
-            if (pos < tr.start) pos = tr.end;
+            if (pos > re) pos = rs;
+            if (pos < rs) pos = re;
         }
-    } else pos = positionFor(tr.dir, tr.start, tr.end, r.counter);
+    } else pos = positionFor(tr.dir, rs, re, r.counter);
     r.pos = pos;
 
     push({grid, 2, 0, 0, 0, (uint8_t) s, (uint8_t) t, (int16_t) pos});
@@ -345,6 +349,21 @@ void Engine::scheduleStep(int s, int t, double grid, double L, double bpm) {
         double d = span / n;
         for (int i = 0; i < n; ++i)
             for (int k = 0; k < nv; ++k) addVoice(time + i * d, std::max(0.002, d * 0.5), voices[k], vel);
+    } else if ((q.mode == Mode::Poly || q.mode == Mode::Chord) && q.arp.seqType != kArpOff && nv > 0) {
+        // sequencer arp: the step's notes are arpeggiated across the step (and its ties)
+        int notes[kMaxChordNotes + 2];
+        for (int k = 0; k < nv; ++k) notes[k] = voices[k].note;
+        std::sort(notes, notes + nv);
+        static thread_local int pat[512];
+        const int pn = buildArpPattern(q.arp, q.arp.seqType, notes, nv, pat, s);
+        const double La = divisionBeats(q.arp.div);
+        const double span = (st.tie + 1) * L;
+        int k = 0;
+        for (double tt = 0.0; tt < span - 1e-6 && pn > 0; tt += La, ++k) {
+            Voice vc = voices[0];
+            vc.note = std::clamp(pat[k % pn], 0, 127); vc.delay = 0.0;
+            addVoice(time + tt, std::max(0.002, q.arp.gate / 100.0 * La), vc, vel);
+        }
     } else {
         for (int k = 0; k < nv; ++k) addVoice(time, dur, voices[k], vel);
     }
@@ -630,18 +649,173 @@ void Engine::playClip(int s, double grid, double L, double bpm) {
     }
 }
 
+
+// ---------------------------------------------------------------- live playing (keyboard view / MIDI input)
+void Engine::liveNote(int ch, int note, int vel, bool on) {
+    if (liveQueue.size() < 500) liveQueue.push_back({(uint8_t) ((on ? 0x90 : 0x80) | (ch & 15)), (uint8_t) std::clamp(note, 0, 127), (uint8_t) (on ? std::clamp(vel, 1, 127) : 0)});
+}
+void Engine::previewNote(int ch, int note, int vel) {
+    liveNote(ch, note, vel, true);
+    if (previewOffs.size() < 60) previewOffs.push_back({ch, std::clamp(note, 0, 127), (int64_t) (sr * 0.2)});
+}
+void Engine::liveRaw(uint8_t status, uint8_t d1, uint8_t d2) { if (liveQueue.size() < 500) liveQueue.push_back({status, d1, d2}); }
+
+void Engine::arpKey(int seq, int note, bool down) {
+    if (seq < 0 || seq >= kNumSeqs) return;
+    auto& a = arpRt[(size_t) seq];
+    const auto& set = proj.seqs[(size_t) seq].arp;
+    const bool sticky = set.hold || set.latch;
+    auto has = [&](int n) { for (int i = 0; i < a.nHeld; ++i) if (a.held[i] == n) return i; return -1; };
+    if (down) {
+        if (set.hold && !set.latch && a.down == 0) a.nHeld = 0; // hold: a new chord replaces the held one
+        a.down++;
+        int i = has(note);
+        if (set.latch && i >= 0 && a.down == 1 && a.nHeld > 0) { // latch: tapping a latched note removes it
+            for (int k = i; k < a.nHeld - 1; ++k) a.held[k] = a.held[k + 1];
+            a.nHeld--;
+        } else if (i < 0 && a.nHeld < 32) a.held[a.nHeld++] = note;
+        a.changed = true;
+    } else {
+        if (a.down > 0) a.down--;
+        if (!sticky) {
+            int i = has(note);
+            if (i >= 0) { for (int k = i; k < a.nHeld - 1; ++k) a.held[k] = a.held[k + 1]; a.nHeld--; a.changed = true; }
+        }
+    }
+}
+void Engine::arpClear(int seq) { if (seq >= 0 && seq < kNumSeqs) { arpRt[(size_t) seq].nHeld = 0; arpRt[(size_t) seq].down = 0; arpRt[(size_t) seq].changed = true; } }
+int Engine::arpNotes(int seq, int* out, int max) const {
+    const auto& a = arpRt[(size_t) seq];
+    int n = std::min(a.nHeld, max);
+    for (int i = 0; i < n; ++i) out[i] = a.held[i];
+    return n;
+}
+
+// Builds one cycle of the arpeggio (MIDI notes) for `type` from `notes` (press order).
+int Engine::buildArpPattern(const ArpSettings& a, int type, const int* notesIn, int n, int* out, int seqIdx) {
+    if (n <= 0) return 0;
+    int base[32];
+    n = std::min(n, 32);
+    for (int i = 0; i < n; ++i) base[i] = notesIn[i];
+    if (type != kArpOrder) std::sort(base, base + n);
+    int list[256], m = 0;
+    const int octs = std::abs((int) a.octV);
+    for (int o = 0; o <= octs && m < 240; ++o)
+        for (int i = 0; i < n && m < 256; ++i) list[m++] = base[i] + (a.octV >= 0 ? 12 * o : -12 * o);
+    if (a.octV < 0 && type != kArpOrder) std::sort(list, list + m);
+    int k = 0;
+    auto put = [&](int v) { if (k < 512) out[k++] = v; };
+    switch (type) {
+        case kArpDown: for (int i = m - 1; i >= 0; --i) put(list[i]); break;
+        case kArpUpDown: for (int i = 0; i < m; ++i) put(list[i]); for (int i = m - 2; i > 0; --i) put(list[i]); break;
+        case kArp2Up2Down: for (int i = 0; i < m; ++i) { put(list[i]); put(list[i]); } for (int i = m - 2; i > 0; --i) { put(list[i]); put(list[i]); } break;
+        case kArpAltIn: for (int lo = 0, hi = m - 1; lo <= hi; ++lo, --hi) { put(list[hi]); if (lo != hi) put(list[lo]); } break;
+        case kArpAltOut: for (int lo = 0, hi = m - 1; lo <= hi; ++lo, --hi) { put(list[lo]); if (lo != hi) put(list[hi]); } break;
+        case kArpAltInOut: {
+            int tmp[256], t = 0;
+            for (int lo = 0, hi = m - 1; lo <= hi; ++lo, --hi) { tmp[t++] = list[hi]; if (lo != hi) tmp[t++] = list[lo]; }
+            for (int i = 0; i < t; ++i) put(tmp[i]);
+            for (int i = t - 2; i > 0; --i) put(tmp[i]);
+            break;
+        }
+        case kArpPinky: if (m == 1) put(list[0]); for (int i = 0; i < m - 1; ++i) { put(list[i]); put(list[m - 1]); } break;
+        case kArpThumb: if (m == 1) put(list[0]); for (int i = 1; i < m; ++i) { put(list[0]); put(list[i]); } break;
+        case kArpRandom: for (int i = 0; i < m; ++i) put(list[rand32() % (uint32_t) m]); break;
+        case kArpRandOnce: {
+            auto& ar = arpRt[(size_t) seqIdx];
+            uint32_t sig = (uint32_t) m * 2654435761u;
+            for (int i = 0; i < m; ++i) sig = sig * 31u + (uint32_t) list[i];
+            if (sig != ar.sig || ar.nRand != m) {
+                ar.sig = sig; ar.nRand = m;
+                for (int i = 0; i < m; ++i) ar.randOrder[i] = list[i];
+                for (int i = m - 1; i > 0; --i) { int j = (int) (rand32() % (uint32_t) (i + 1)); std::swap(ar.randOrder[i], ar.randOrder[j]); }
+            }
+            for (int i = 0; i < m; ++i) put(ar.randOrder[i]);
+            break;
+        }
+        default: for (int i = 0; i < m; ++i) put(list[i]); break; // Up and Order
+    }
+    return k;
+}
+
+// Keyboard arpeggiators: one clock per sequencer at the arp division, locked to the timeline.
+void Engine::runArps(double from, double to, double bpm) {
+    for (int s = 0; s < kNumSeqs; ++s) {
+        auto& q = proj.seqs[(size_t) s];
+        auto& a = arpRt[(size_t) s];
+        const auto& set = q.arp;
+        if (set.type == kArpOff || a.nHeld == 0) { a.nextGrid = -1.0; continue; }
+        const double La = divisionBeats(set.div);
+        if (a.nextGrid < 0.0) { a.nextGrid = std::ceil(from / La - 1e-7) * La; a.tick = 0; a.grooveBase = 0; a.pos = 0; a.repLeft = 0; }
+        if (a.changed) {
+            a.changed = false;
+            if (set.reset == 1 || set.reset == 3) a.pos = 0;
+            if (set.reset >= 2) a.grooveBase = a.tick;
+        }
+        static thread_local int pat[512];
+        int guard = 0;
+        while (a.nextGrid < to && guard++ < 256) {
+            const double g = a.nextGrid;
+            a.nextGrid += La;
+            const int64_t t = a.tick++;
+            // euclidean gate: pulses spread over len steps, plus repeats after each pulse
+            const int len = std::max<int>(1, set.len), puls = std::clamp<int>(set.puls, 1, len);
+            const int ep = (int) (t % len);
+            const bool pulse = ((ep * puls) % len) < puls;
+            bool fire = pulse;
+            if (pulse) a.repLeft = set.rept;
+            else if (a.repLeft > 0) { a.repLeft--; fire = true; }
+            if (!fire || !q.active || q.muted) continue;
+            const int pn = buildArpPattern(set, set.type, a.held, a.nHeld, pat, s);
+            if (pn <= 0) continue;
+            const int note = std::clamp(pat[a.pos % pn] + transposeOffset[(size_t) s], 0, 127);
+            a.pos = (a.pos + 1) % std::max(1, pn);
+            const auto& gr = grooveTemplate(set.groove);
+            const int gi = (int) (((t - a.grooveBase) % 16 + 16) % 16);
+            double vel = q.kbVel * (1.0 + set.accent / 100.0 * gr.velocity[(size_t) gi]);
+            double on = g + set.gtime / 100.0 * gr.timing[(size_t) gi] * La + q.nudgeMs / 1000.0 * bpm / 60.0;
+            const uint8_t ch = q.mode == Mode::Multi ? q.pat().tracks[0].channel : q.channel;
+            push({std::max(from, on), 0, ch, (uint8_t) note, (uint8_t) std::clamp((int) std::lround(vel), 1, 127), (uint8_t) s, 0, 0});
+            push({std::max(from, on) + std::max(0.002, set.gate / 100.0 * La), 1, ch, (uint8_t) note, 0, (uint8_t) s, 0, 0});
+        }
+    }
+}
+
 void Engine::process(const Transport& host, int numSamples, const std::vector<MidiIn>& in, std::vector<MidiOut>& out) {
-    // ---- MIDI input: transposition (manual 3.15 "Trnsp")
+    // ---- MIDI input: transposition (manual 3.15 "Trnsp"), otherwise the selected sequencer's keyboard
     for (auto& m : in) {
-        if ((m.status & 0xF0) != 0x90 || m.data2 == 0) continue;
+        const int type = m.status & 0xF0;
+        const bool on = type == 0x90 && m.data2 > 0, off = type == 0x80 || (type == 0x90 && m.data2 == 0);
+        if (!on && !off) continue;
         int ch = m.status & 0x0F;
+        bool used = false;
         for (int s = 0; s < kNumSeqs; ++s) {
             auto& q = proj.seqs[(size_t) s];
             if (q.transpose == 0) continue;
             int want = q.transpose == 1 ? q.channel : q.transpose - 2;
             if (want != ch) continue;
-            transposeOffset[(size_t) s] = (int) m.data1 - q.baseMidi();
+            used = true;
+            if (on) transposeOffset[(size_t) s] = (int) m.data1 - q.baseMidi();
         }
+        if (used) continue;
+        const int ks = std::clamp(kbTarget, 0, kNumSeqs - 1);
+        auto& kq = proj.seqs[(size_t) ks];
+        if (kq.arp.type != kArpOff) arpKey(ks, m.data1, on);
+        else liveNote(kq.channel, m.data1, m.data2, on);
+    }
+    // ---- live notes and previews (also while stopped)
+    for (auto& e : liveQueue) {
+        int t = e.st & 0xF0, ch = e.st & 15;
+        if (t == 0x90) emitNoteOn(out, 0, ch, e.d1, e.d2);
+        else if (t == 0x80) emitNoteOff(out, 0, ch, e.d1);
+        else out.push_back({0, e.st, e.d1, e.d2});
+    }
+    liveQueue.clear();
+    for (size_t i = 0; i < previewOffs.size();) {
+        auto& p = previewOffs[i];
+        p.samplesLeft -= numSamples;
+        if (p.samplesLeft <= 0) { emitNoteOff(out, std::max(0, numSamples - 1), p.ch, p.note); previewOffs[i] = previewOffs.back(); previewOffs.pop_back(); }
+        else ++i;
     }
 
     if (panicPending) {
@@ -666,6 +840,7 @@ void Engine::process(const Transport& host, int numSamples, const std::vector<Mi
     const double blockEnd = tp.ppq + numSamples * ppqPerSample;
 
     if (!tp.playing) {
+        for (auto& a : arpRt) a.nextGrid = -1.0;
         if (wasPlaying) stopAll(out, 0);
         wasPlaying = false;
         expectedPpq = -1.0;
@@ -723,6 +898,8 @@ void Engine::process(const Transport& host, int numSamples, const std::vector<Mi
             }
         }
     }
+
+    runArps(tp.ppq, blockEnd, tp.bpm);
 
     // ---- emit due events
     due.clear();

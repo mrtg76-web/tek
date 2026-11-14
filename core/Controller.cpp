@@ -112,7 +112,7 @@ void Controller::toggleStep(int x, int y, double nowMs) {
         int idx = stepAt(x);
         auto& st = tr.steps[(size_t) idx];
         if (st.active) st.clear();
-        else placeNote(tr, idx, 0);
+        else { placeNote(tr, idx, 0); preview(tr.baseNote, tr.channel, st.velocity); }
         return;
     }
     auto& tr = track();
@@ -128,6 +128,7 @@ void Controller::toggleStep(int x, int y, double nowMs) {
     } else {
         placeNote(tr, idx, deg);
         if (isChord()) msg(chordName(seq().scale, seq().baseMidi() + st.octave * 12, deg, st.chordType), nowMs);
+        preview(seq().baseMidi() + degreeToSemis(seq().scale, deg) + st.octave * 12, seq().channel, st.velocity);
     }
 }
 
@@ -191,6 +192,8 @@ std::vector<int> Controller::heldStepIndices() const {
 // ============================================================================ pads
 void Controller::padDown(int x, int y, double nowMs) {
     if (x < 0 || x > 15 || y < 0 || y > 7) return;
+    if (grid == GridMode::Keys) { keyPad(x, y, true, nowMs); return; }
+    if (loopView && grid == GridMode::Steps) { loopPad(x, y, nowMs); return; }
     if (grid == GridMode::Load) { loadPad(x, y, nowMs); return; }
     if (grid == GridMode::Column) { columnPad(x, y, nowMs); return; }
 
@@ -280,6 +283,7 @@ void Controller::padDown(int x, int y, double nowMs) {
 }
 
 void Controller::padUp(int x, int y, double nowMs) {
+    if (grid == GridMode::Keys) { keyPad(x, y, false, nowMs); }
     for (size_t i = 0; i < heldPads.size(); ++i) {
         auto h = heldPads[i];
         if (h.x != x || h.y != y) continue;
@@ -945,6 +949,161 @@ void Controller::editAcc(Step& st, int page, int knob, int delta) {
 std::string Controller::scaleText() const { return seq().harm >= 0 ? std::string("HARMON") : std::string(scaleLibrary()[seq().scale].label); }
 std::string Controller::rootText() const { return seq().harm >= 0 ? "Sq" + std::to_string(seq().harm + 1) + " " + noteName(seq().baseOctave * 12 + 24) : noteName(seq().baseMidi()); }
 
+// ============================================================================ keyboard view (manual 5.1)
+int Controller::keyNote(int x, int y) const {
+    if (x >= 12) return -1;
+    return std::clamp((seq().kbBase + 2 + (7 - y)) * 12 + x, 0, 127); // rows = octaves from the base, columns = semitones
+}
+
+void Controller::preview(int note, int ch, int vel) { if (previewOn) eng.previewNote(ch, std::clamp(note, 0, 127), vel); }
+
+void Controller::keyPad(int x, int y, bool down, double nowMs) {
+    (void) nowMs;
+    if (!down) {
+        for (size_t i = 0; i < keyHeld.size(); ++i) {
+            if (keyHeld[i].x != x || keyHeld[i].y != y) continue;
+            if (keyHeld[i].arp) eng.arpKey(sel, keyHeld[i].note, false);
+            else eng.liveNote(keyHeld[i].ch, keyHeld[i].note, 0, false);
+            keyHeld.erase(keyHeld.begin() + (long) i);
+            break;
+        }
+        return;
+    }
+    auto& q = seq();
+    if (isMulti()) { // drum pads: row = track, column = velocity
+        const auto& tr = q.pat().tracks[(size_t) (7 - y)];
+        int vel = std::min(127, 8 + x * 8);
+        eng.liveNote(tr.channel, tr.baseNote, vel, true);
+        keyHeld.push_back({x, y, tr.baseNote, tr.channel, false});
+        return;
+    }
+    const int note = keyNote(x, y);
+    if (note < 0) return;
+    const bool arp = q.arp.type != kArpOff;
+    if (arp) eng.arpKey(sel, note, true);
+    else eng.liveNote(q.channel, note, q.kbVel, true);
+    keyHeld.push_back({x, y, note, (int) q.channel, arp});
+}
+
+std::string Controller::chordFromNotes(const int* notes, int n) {
+    if (n < 2) return n == 1 ? noteName(notes[0]) : std::string();
+    bool pcs[12] = {};
+    for (int i = 0; i < n; ++i) pcs[((notes[i] % 12) + 12) % 12] = true;
+    struct Q { const char* name; int iv[4]; int cnt; };
+    static const Q qs[] = {{"maj7", {0, 4, 7, 11}, 4}, {"7", {0, 4, 7, 10}, 4}, {"m7", {0, 3, 7, 10}, 4}, {"m7b5", {0, 3, 6, 10}, 4}, {"dim7", {0, 3, 6, 9}, 4},
+                           {"maj", {0, 4, 7, 0}, 3}, {"min", {0, 3, 7, 0}, 3}, {"dim", {0, 3, 6, 0}, 3}, {"aug", {0, 4, 8, 0}, 3},
+                           {"sus2", {0, 2, 7, 0}, 3}, {"sus4", {0, 5, 7, 0}, 3}, {"5", {0, 7, 0, 0}, 2}};
+    int count = 0; for (bool b : pcs) count += b;
+    int lowest = notes[0]; for (int i = 1; i < n; ++i) lowest = std::min(lowest, notes[i]);
+    for (const auto& qq : qs) {
+        if (qq.cnt != count) continue;
+        for (int root = 0; root < 12; ++root) {
+            bool ok = true;
+            for (int k = 0; k < qq.cnt && ok; ++k) ok = pcs[(root + qq.iv[k]) % 12];
+            if (!ok) continue;
+            std::string nm = std::string(pitchClassName(root)) + qq.name;
+            if (root != ((lowest % 12) + 12) % 12) nm += std::string("/") + pitchClassName(lowest);
+            return nm;
+        }
+    }
+    return std::to_string(count) + " notes";
+}
+
+void Controller::renderKeys(Frame& f) const {
+    const auto& q = seq();
+    const uint32_t col = seqColor(q.color);
+    int arpN[32];
+    const int na = eng.arpNotes(sel, arpN, 32);
+    auto isHeld = [&](int x, int y, int note) {
+        for (auto& k : keyHeld) if (k.x == x && k.y == y) return true;
+        for (int i = 0; i < na; ++i) if (arpN[i] == note) return true;
+        return false;
+    };
+    if (isMulti()) {
+        for (int y = 0; y < 8; ++y)
+            for (int x = 0; x < 16; ++x)
+                f.pads[(size_t) (y * 16 + x)] = isHeld(x, y, -1) ? 0xffffff : dim(col, 0.15f + 0.85f * x / 15.0f);
+        return;
+    }
+    const auto& iv = scaleLibrary()[q.scale].intervals;
+    const bool chromatic = q.scale == 0;
+    for (int y = 0; y < 8; ++y)
+        for (int x = 0; x < 16; ++x) {
+            uint32_t c = 0;
+            const int note = keyNote(x, y);
+            if (note >= 0) {
+                const int rel = ((note - q.rootPc) % 12 + 12) % 12;
+                if (chromatic) { static const bool white[12] = {1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 0, 1}; c = white[x] ? dim(col, 0.8f) : 0; }
+                else if (std::find(iv.begin(), iv.end(), rel) != iv.end()) c = rel == 0 ? col : dim(col, 0.55f);
+                else c = 0x501414;
+                if (isHeld(x, y, note)) c = 0xffffff;
+            } else if (x == 12) c = dim(0x40d0ff, 0.15f + 0.1f * (7 - y)); // roller column (phase 3b)
+            f.pads[(size_t) (y * 16 + x)] = c;
+        }
+}
+
+// ============================================================================ arpeggiator menu (manual 5.3)
+void Controller::editArp(int knob, int delta, double nowMs) {
+    auto& a = seq().arp;
+    const bool seqCtx = seqArpContext();
+    if (menuPage == 0) {
+        if (knob == 0) {
+            uint8_t& t = seqCtx ? a.seqType : a.type;
+            t = clampT<uint8_t>(t + delta, 0, kNumArpTypes - 1);
+            if (!seqCtx && t == kArpOff) eng.arpClear(sel);
+            if (t != kArpOff) lastArpType[(size_t) sel] = t;
+        }
+        if (knob == 1) a.octV = clampT<int8_t>(a.octV + delta, -7, 7);
+        if (knob == 2) a.gate = clampT<uint8_t>(a.gate + delta * 2, 2, 100);
+        if (knob == 3) a.div = clampT<Division>((int) a.div + delta, 0, (int) Division::Count - 1);
+    } else if (menuPage == 1) {
+        if (knob == 0) a.accent = clampT<int8_t>(a.accent + delta * 5, -100, 100);
+        if (knob == 1) { a.len = clampT<uint8_t>(a.len + delta, 1, 32); if (a.puls > a.len) a.puls = a.len; }
+        if (knob == 2) a.puls = clampT<uint8_t>(a.puls + delta, 1, a.len);
+        if (knob == 3) a.rept = clampT<uint8_t>(a.rept + delta, 0, 16);
+    } else {
+        if (knob == 0) a.gtime = clampT<int8_t>(a.gtime + delta * 5, -100, 100);
+        if (knob == 1) a.groove = clampT<uint8_t>(a.groove + delta, 1, kNumGrooves);
+        if (knob == 2) a.reset = clampT<uint8_t>(a.reset + delta, 0, 3);
+        if (knob == 3) { a.latch = delta > 0; if (!a.latch && !a.hold) eng.arpClear(sel); }
+    }
+    (void) nowMs;
+}
+
+// ============================================================================ loops (manual 5.2)
+void Controller::loopPad(int x, int y, double nowMs) {
+    auto& tr = track();
+    const int idx = stepAt(x);
+    if (loopAnchor < 0 || heldPads.empty()) {
+        loopAnchor = idx;
+        heldPads.push_back({x, y, nowMs, true});
+        return;
+    }
+    const int a = std::min(loopAnchor, idx), b = std::max(loopAnchor, idx);
+    tr.loopStart = (uint8_t) a; tr.loopEnd = (uint8_t) b;
+    loopAnchor = -1;
+    heldPads.push_back({x, y, nowMs, true});
+    msg("LOOP " + std::to_string(a + 1) + "-" + std::to_string(b + 1), nowMs);
+}
+
+void Controller::editLoop(int knob, int delta, double nowMs) {
+    auto& tr = track();
+    if (knob == 3) { if (isMulti()) selTrack[(size_t) sel] = std::clamp(selTrack[(size_t) sel] + delta, 0, kNumTracks - 1); return; }
+    if (knob == 2) { int r = tr.loopRate == 255 ? -1 : tr.loopRate; r = std::clamp(r + delta, -1, (int) Division::Count - 1); tr.loopRate = (uint8_t) (r < 0 ? 255 : r); return; }
+    if (!tr.hasLoop()) { tr.loopStart = tr.start; tr.loopEnd = (uint8_t) std::min<int>(tr.end, tr.start + 3); }
+    int len = tr.loopEnd - tr.loopStart + 1;
+    if (knob == 0) {
+        len = delta > 0 ? std::min(kMaxSteps - tr.loopStart, len * 2) : std::max(1, len / 2);
+        tr.loopEnd = (uint8_t) (tr.loopStart + len - 1);
+    }
+    if (knob == 1) {
+        int step = held(Btn::Shift) ? len : 1;
+        int ns = std::clamp(tr.loopStart + delta * step, 0, kMaxSteps - len);
+        tr.loopStart = (uint8_t) ns; tr.loopEnd = (uint8_t) (ns + len - 1);
+    }
+    msg("LOOP " + std::to_string(tr.loopStart + 1) + "-" + std::to_string(tr.loopEnd + 1), nowMs);
+}
+
 // ============================================================================ encoders
 void Controller::relative(uint8_t Step::*field, int delta, int lo, int hi, const char* name, double nowMs) {
     auto& tr = (isDomino() && field == &Step::repeats) ? track() : noteTrack();
@@ -1212,8 +1371,18 @@ void Controller::encoderTurn(int knob, int delta, double nowMs) {
         msg("START " + std::to_string(tr.start + 1) + "  END " + std::to_string(tr.end + 1), nowMs);
         return;
     }
-    if (menu != Menu::None) { editMenu(knob, delta, nowMs); return; }
+    if (menu == Menu::Arp && !held(Btn::Shift)) { editArp(knob, delta, nowMs); return; }
+    if (menu != Menu::None && menu != Menu::Arp) { editMenu(knob, delta, nowMs); return; }
     if (held(Btn::Shift)) { btnConsumed[(int) Btn::Shift] = true; editShift(knob, delta, nowMs); return; }
+    if (loopView && grid == GridMode::Steps) { editLoop(knob, delta, nowMs); return; }
+    if (grid == GridMode::Keys) {
+        auto& q = seq();
+        if (knob == 0) q.kbVel = clampT<uint8_t>(q.kbVel + delta, 1, 127);
+        if (knob == 1) { kbBend = std::clamp(kbBend + delta * 8, -128, 127); int v = std::clamp(8192 + kbBend * 64, 0, 16383); eng.liveRaw((uint8_t) (0xE0 | q.channel), (uint8_t) (v & 127), (uint8_t) (v >> 7)); }
+        if (knob == 2) { kbAt = std::clamp(kbAt + delta, 0, 127); eng.liveRaw((uint8_t) (0xD0 | q.channel), (uint8_t) kbAt, 0); }
+        if (knob == 3) q.kbBase = clampT<int8_t>(q.kbBase + delta, -2, 4);
+        return;
+    }
     editGlobal(knob, delta, nowMs);
 }
 
@@ -1241,6 +1410,22 @@ void Controller::tapKnob(int knob, double nowMs) {
     }
     if (menu == Menu::Setup && menuPage == 0 && knob == 3 && pendingMode >= 0) { changeMode((Mode) pendingMode, nowMs); pendingMode = -1; return; }
     if (menu == Menu::Nudge || menu == Menu::Bend) { knobUpper = !knobUpper; return; }
+    if (menu == Menu::Arp && menuPage == 0 && knob == 0) { // quick on / off keeping the last type
+        auto& a = seq().arp;
+        uint8_t& t = seqArpContext() ? a.seqType : a.type;
+        if (t != kArpOff) { lastArpType[(size_t) sel] = t; t = kArpOff; } else t = lastArpType[(size_t) sel] ? lastArpType[(size_t) sel] : (uint8_t) kArpUp;
+        if (!seqArpContext() && a.type == kArpOff) eng.arpClear(sel);
+        msg(std::string(seqArpContext() ? "SEQ ARP " : "ARP ") + arpTypeLabel(t), nowMs);
+        return;
+    }
+    if (grid == GridMode::Keys && menu == Menu::None && !held(Btn::Shift)) {
+        auto& q = seq();
+        if (knob == 0) q.kbVel = 75;
+        if (knob == 1) { kbBend = 0; eng.liveRaw((uint8_t) (0xE0 | q.channel), 0, 64); }
+        if (knob == 2) { kbAt = 0; eng.liveRaw((uint8_t) (0xD0 | q.channel), 0, 0); }
+        if (knob == 3) q.kbBase = 0;
+        return;
+    }
     if (menu != Menu::None) return;
     if (held(Btn::Shift)) { // reset secondary parameters
         btnConsumed[(int) Btn::Shift] = true;
@@ -1432,6 +1617,7 @@ void Controller::button(Btn b, bool down, double nowMs) {
         if (b == Btn::Flow) eng.flowHeld = false;
         if (b == Btn::Copy) stepClipFresh = false;
         if (b == Btn::Track && !btnConsumed[bi] && nowMs - lastTap[(size_t) bi] > 600 && menu == Menu::TrackM) menu = Menu::None; // momentary view
+        if (b == Btn::Keyboard && grid == GridMode::Keys && nowMs - keyboardDownMs > 600 && !held(Btn::Shift)) grid = GridMode::Steps; // momentary
         return;
     }
     heldBtn[(size_t) bi] = true;
@@ -1448,6 +1634,7 @@ void Controller::button(Btn b, bool down, double nowMs) {
     switch (b) {
         case Btn::Back:
             if (shift) { msg("CONFIG: SEE SETUP PAGES", nowMs); break; }
+            if (loopView) { loopView = false; loopAnchor = -1; break; }
             if (dbl || (menu == Menu::None && grid == GridMode::Steps)) { menu = Menu::None; grid = GridMode::Steps; heldPads.clear(); scrollMode = false; }
             else if (menu != Menu::None) { menu = Menu::None; pendingMode = -1; }
             else grid = GridMode::Steps;
@@ -1478,6 +1665,7 @@ void Controller::button(Btn b, bool down, double nowMs) {
             else if (menu == Menu::TrackM && isMulti()) menuPage = (menuPage + 1) % 2;
             else if (menu == Menu::StepM) menuPage = (menuPage + 1) % ((isChord() || hasAcc()) ? 3 : 2);
             else if (menu == Menu::Groove) menuPage = (menuPage + 1) % 2;
+            else if (menu == Menu::Arp) menuPage = (menuPage + 1) % 3;
             else if (menu == Menu::Nudge) menu = Menu::Bend;
             else if (menu == Menu::Bend) menu = Menu::Nudge;
             break;
@@ -1486,9 +1674,19 @@ void Controller::button(Btn b, bool down, double nowMs) {
             else msg("LFO: PHASE 4", nowMs);
             break;
         case Btn::Init:
+            if (!shift && (held(Btn::End) || loopView)) {
+                if (held(Btn::End) && !loopView) { loopView = true; btnConsumed[(int) Btn::End] = btnConsumed[(int) Btn::Init] = true; msg("LOOP VIEW: PRESS START + END PADS", nowMs); }
+                else if (loopView && !held(Btn::End)) { track().loopStart = track().loopEnd = 255; msg("LOOP CLEARED", nowMs); }
+                break;
+            }
             if (shift) { auto& tr = track(); pushUndo(); if (tr.div < Division::SixtyFourth) tr.div = (Division) ((int) tr.div + 1); msg(std::string("DIV ") + divisionLabel(tr.div), nowMs); }
             break;
         case Btn::End:
+            if (!shift && (held(Btn::Init) || loopView)) {
+                if (held(Btn::Init) && !loopView) { loopView = true; btnConsumed[(int) Btn::End] = btnConsumed[(int) Btn::Init] = true; msg("LOOP VIEW: PRESS START + END PADS", nowMs); }
+                else if (loopView && !held(Btn::Init)) { track().loopStart = track().loopEnd = 255; msg("LOOP CLEARED", nowMs); }
+                break;
+            }
             if (shift) { auto& tr = track(); pushUndo(); if (tr.div > Division::Bar) tr.div = (Division) ((int) tr.div - 1); msg(std::string("DIV ") + divisionLabel(tr.div), nowMs); }
             break;
         case Btn::Copy:
@@ -1540,12 +1738,30 @@ void Controller::button(Btn b, bool down, double nowMs) {
             if (shift && isPlayer()) { midiLoadReq = true; midiLoadSeq = sel; msg("CHOOSE A .MID FILE", nowMs); break; }
             msg(shift ? "PROJECT MENU: PHASE 3 (MIDI file: PLYR mode)" : "PERFORM: COMING IN A LATER PHASE", nowMs);
             break;
-        case Btn::Gen: case Btn::Mod: case Btn::Arranger: case Btn::Keyboard:
+        case Btn::Keyboard:
+            if (shift) { previewOn = !previewOn; msg(previewOn ? "PREVIEW ON" : "PREVIEW OFF", nowMs); break; }
+            keyboardDownMs = nowMs;
+            grid = grid == GridMode::Keys ? GridMode::Steps : GridMode::Keys;
+            if (grid != GridMode::Keys) { for (auto& k : keyHeld) { if (k.arp) eng.arpKey(sel, k.note, false); else eng.liveNote(k.ch, k.note, 0, false); } keyHeld.clear(); }
+            break;
+        case Btn::Arp:
+            if (shift) {
+                auto& a = seq().arp;
+                a.hold = !a.hold;
+                if (!a.hold) eng.arpClear(sel);
+                msg(a.hold ? "ARP HOLD ON" : "ARP HOLD OFF", nowMs);
+                break;
+            }
+            if (menu == Menu::Arp) { menu = Menu::None; break; }
+            menu = Menu::Arp; menuPage = 0;
+            if (!(seq().mode == Mode::Poly || seq().mode == Mode::Chord) && !isMulti()) grid = GridMode::Keys;
+            break;
+        case Btn::Gen: case Btn::Mod: case Btn::Arranger:
         case Btn::Random:
             if (isMatr()) { msg("HOLD RANDOM + TAP A LANE PAD", nowMs); break; }
             msg(std::string(btnLabel(b)) + ": COMING IN A LATER PHASE", nowMs);
             break;
-        case Btn::Arp: case Btn::Rec:
+        case Btn::Rec:
             msg(std::string(btnLabel(b)) + ": COMING IN A LATER PHASE", nowMs);
             break;
         default: break;
@@ -1684,6 +1900,30 @@ void Controller::renderDisplay(Frame& f, double nowMs) const {
         if (grid == GridMode::Column) f.line2 = columnParam == 0 ? "Velocity editor" : columnParam == 1 ? "Gate editor (top = LEG)" : "Retrig editor (Shift: repeats)";
         if (grid == GridMode::Load) { f.line1 = "LOAD: rows = sequencers, columns = patterns"; f.line2 = "Copy/Paste + pad, Shift + pad = clear"; }
     }
+    if (menu == Menu::Arp) {
+        const auto& a = q.arp;
+        const bool sc = seqArpContext();
+        const int t = sc ? a.seqType : a.type;
+        static const char* rs[4] = {"OFF", "aPos", "Grve", "All"};
+        f.line1 = std::string(sc ? "Seq Arp: " : "Keyboard Arp: ") + arpTypeLabel(t) + (a.hold && !sc ? "  HOLD" : "") + "  " + std::to_string(menuPage + 1) + "/3";
+        f.line2 = sc ? "arpeggiates the step notes" : "play notes on the keyboard pads";
+        if (menuPage == 0) set("Type", arpTypeLabel(t), "OctV", std::to_string(a.octV), "Gate", std::to_string(a.gate), "Div", divisionLabel(a.div));
+        else if (menuPage == 1) set("Accnt", std::to_string(a.accent) + "%", "Len", std::to_string(a.len), "Puls", std::to_string(a.puls), "Rept", std::to_string(a.rept));
+        else set("GTim", std::to_string(a.gtime) + "%", "Grov", grooveTemplate(a.groove).name, "Reset", rs[a.reset], "Latch", a.latch ? "ON" : "OFF");
+    } else if (grid == GridMode::Keys && menu == Menu::None && !held(Btn::Shift)) {
+        int notes[48], n = 0;
+        for (auto& k : keyHeld) if (n < 48) notes[n++] = k.note;
+        n += eng.arpNotes(sel, notes + n, 48 - n);
+        f.line1 = std::string(isMulti() ? "Drum pads" : "Keyboard") + (q.arp.type != kArpOff ? std::string("  ARP ") + arpTypeLabel(q.arp.type) : "") + (previewOn ? "  PRV" : "");
+        f.line2 = n ? chordFromNotes(notes, n) : (isMulti() ? "row = track, column = velocity" : "rows = octaves");
+        set("Vel", std::to_string(q.kbVel), "Bend", std::to_string(kbBend), "At", std::to_string(kbAt), "Base", "C" + std::to_string(q.kbBase));
+    } else if (loopView && grid == GridMode::Steps && menu == Menu::None && !held(Btn::Shift)) {
+        const auto& tr = track();
+        f.line1 = tr.hasLoop() ? "LOOPED  " + std::to_string(tr.loopStart + 1) + "-" + std::to_string(tr.loopEnd + 1) : std::string("LOOP VIEW - press start + end pads");
+        f.line2 = "INIT/END: clear loop   BACK: exit";
+        set("Len", tr.hasLoop() ? std::to_string(tr.loopEnd - tr.loopStart + 1) : "-", "Pos", tr.hasLoop() ? std::to_string(tr.loopStart + 1) : "-",
+            "Rate", tr.loopRate == 255 ? divisionLabel(tr.div) : divisionLabel((Division) tr.loopRate), "Track", isMulti() ? std::to_string(trackIndex() + 1) : "-");
+    }
     if (isMatr() && menu == Menu::None && grid == GridMode::Steps) renderMatrDisplay(f);
     if (isDomino() && menu == Menu::None && grid == GridMode::Steps && !held(Btn::Shift)) renderDominoDisplay(f);
     if (isSaga() && menu == Menu::None && grid == GridMode::Steps && !held(Btn::Shift)) renderSagaDisplay(f);
@@ -1737,6 +1977,7 @@ void Controller::renderSteps(Frame& f, double nowMs) const {
             if (((deg % scaleN) + scaleN) % scaleN == 0) c = 0x3b3e43; // octave root row
             if (showRange && (idx == tr.start || idx == tr.end)) c = 0x3a2050;
             if (!inRange) c = 0;
+            if (tr.hasLoop() && idx >= tr.loopStart && idx <= tr.loopEnd && (c == 0 || c == 0x3b3e43)) c = loopView ? 0x3a1f5a : 0x2a1a3a;
             if (tieSrc && tieSrc->hasNote(deg)) c = 0x707070;
             if (chordTones[(size_t) y]) c = dim(col, 0.42f);
             if (st.active && st.hasNote(deg)) c = st.muted ? 0x4a1d5a : (inRange ? col : dim(col, 0.35f));
@@ -1850,6 +2091,7 @@ void Controller::renderLoad(Frame& f, double nowMs) const {
 }
 
 void Controller::render(Frame& f, double nowMs) const {
+    eng.kbTarget = sel;
     f.pads.fill(0);
     f.leds.fill(0);
     f.labels = {}; f.values = {}; f.message.clear();
@@ -1860,7 +2102,8 @@ void Controller::render(Frame& f, double nowMs) const {
         if (ph >= 0) const_cast<Controller*>(this)->page[(size_t) sel] = ph / 16;
     }
 
-    if (grid == GridMode::Load) renderLoad(f, nowMs);
+    if (grid == GridMode::Keys) renderKeys(f);
+    else if (grid == GridMode::Load) renderLoad(f, nowMs);
     else if (grid == GridMode::Column) renderColumn(f);
     else if (lanesView()) renderLanes(f, nowMs);
     else if (isStoch()) renderStoch(f);
@@ -1890,8 +2133,19 @@ void Controller::render(Frame& f, double nowMs) const {
     if (menu == Menu::TrackM) f.leds[(int) Btn::Track] = 0xffffff;
     if (grid == GridMode::Load) f.leds[(int) Btn::Load] = 0xffffff;
     if (eng.flowHeld.load()) f.leds[(int) Btn::Flow] = 0xffa000;
+    if (grid == GridMode::Keys) f.leds[(int) Btn::Keyboard] = 0xffffff;
+    if (previewOn) f.leds[(int) Btn::Keyboard] = std::max<uint32_t>(f.leds[(int) Btn::Keyboard], 0x30d0c0);
+    {
+        const auto& a = seq().arp;
+        const bool on = seqArpContext() ? a.seqType != kArpOff : a.type != kArpOff;
+        if (menu == Menu::Arp) f.leds[(int) Btn::Arp] = 0xffffff;
+        else if (on) f.leds[(int) Btn::Arp] = std::fmod(nowMs, 500.0) < 250.0 ? 0xffffff : 0x303030;
+        if (a.hold) f.leds[(int) Btn::Arp] = std::max<uint32_t>(f.leds[(int) Btn::Arp], 0x30d0c0);
+    }
+    if (loopView) { f.leds[(int) Btn::Init] = f.leds[(int) Btn::End] = 0xffffff; }
+    else if (track().hasLoop()) { uint32_t c = std::fmod(nowMs, 600.0) < 300.0 ? 0xb070ff : 0x302040; f.leds[(int) Btn::Init] = f.leds[(int) Btn::End] = c; }
     if (!undoStack.empty()) f.leds[(int) Btn::Undo] = std::max<uint32_t>(f.leds[(int) Btn::Undo], 0x404040);
-    if (menu == Menu::Setup || menu == Menu::TrackM || menu == Menu::StepM || menu == Menu::Groove || !heldPads.empty())
+    if (menu == Menu::Setup || menu == Menu::TrackM || menu == Menu::StepM || menu == Menu::Groove || menu == Menu::Arp || !heldPads.empty())
         f.leds[(int) Btn::Page] = std::fmod(nowMs, 600.0) < 300.0 ? 0xffffff : 0x303030;
 }
 

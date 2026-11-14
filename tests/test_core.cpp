@@ -481,6 +481,72 @@ static void testAccumulatorHarmonizer() {
     CHECK(chMxLabel(9) == "3 Hi" && chMxLabel(1) == "2 Lo");
 }
 
+static std::vector<int> arpRun(int type, int octV, int len, int puls, std::vector<int> keys, double beats) {
+    auto p = std::make_unique<Project>();
+    auto& a = p->seqs[0].arp;
+    a.type = (uint8_t) type; a.octV = (int8_t) octV; a.len = (uint8_t) len; a.puls = (uint8_t) puls;
+    Engine e(*p);
+    for (int k : keys) e.arpKey(0, k, true);
+    std::vector<int> r;
+    for (auto& x : ons(run(e, beats))) r.push_back(x.note);
+    return r;
+}
+
+static void testLiveArpLoop() {
+    // live note while stopped
+    auto p = std::make_unique<Project>();
+    Engine e(*p);
+    e.prepare(48000);
+    std::vector<MidiIn> in; std::vector<MidiOut> out;
+    e.liveNote(3, 64, 99, true);
+    Transport stop; stop.playing = false;
+    e.process(stop, 256, in, out);
+    CHECK(out.size() == 1 && out[0].status == 0x93 && out[0].data1 == 64 && out[0].data2 == 99);
+    // MIDI input plays the selected sequencer (thru on its channel)
+    out.clear(); e.kbTarget = 2;
+    in.push_back({0x90, 60, 100});
+    e.process(stop, 256, in, out);
+    CHECK(out.size() == 1 && out[0].status == 0x92);
+
+    CHECK((arpRun(kArpUp, 0, 16, 16, {64, 60, 67}, 1.0) == std::vector<int>{60, 64, 67, 60}));
+    CHECK((arpRun(kArpDown, 0, 16, 16, {60, 64, 67}, 1.0) == std::vector<int>{67, 64, 60, 67}));
+    CHECK((arpRun(kArpUp, 1, 16, 16, {60, 64, 67}, 1.5) == std::vector<int>{60, 64, 67, 72, 76, 79}));
+    CHECK((arpRun(kArpUpDown, 0, 16, 16, {60, 64, 67}, 1.0) == std::vector<int>{60, 64, 67, 64}));
+    CHECK((arpRun(kArpOrder, 0, 16, 16, {67, 60, 64}, 0.75) == std::vector<int>{67, 60, 64}));
+    CHECK((arpRun(kArpThumb, 0, 16, 16, {60, 64, 67}, 1.0) == std::vector<int>{60, 64, 60, 67}));
+    CHECK(arpRun(kArpUp, 0, 4, 1, {60, 64, 67}, 2.0).size() == 2);   // euclid 1 pulse in 4
+
+    // hold keeps released notes
+    auto ph = std::make_unique<Project>();
+    ph->seqs[0].arp.type = kArpUp; ph->seqs[0].arp.hold = true;
+    Engine eh(*ph);
+    eh.arpKey(0, 60, true); eh.arpKey(0, 60, false);
+    int buf[8];
+    CHECK(eh.arpNotes(0, buf, 8) == 1);
+    CHECK(ons(run(eh, 0.5)).size() == 2);
+
+    // sequencer arp: a poly step arpeggiated at 1/32
+    auto pp = std::make_unique<Project>();
+    auto& pq = pp->seqs[0];
+    pq.mode = Mode::Poly; pq.arp.seqType = kArpUp; pq.arp.div = Division::ThirtySecond;
+    auto& st = pq.pat().tracks[0].steps[0];
+    st.active = true; st.numNotes = 3; st.notes = {7, 0, 4, 0, 0, 0, 0};
+    Engine ep(*pp);
+    auto n = ons(run(ep, 0.25));
+    CHECK(n.size() == 2 && n[0].note == 48 && n[1].note == 52);
+
+    // loop inside the pattern
+    auto pl = std::make_unique<Project>();
+    auto& tr = pl->seqs[0].pat().tracks[0];
+    for (int i = 0; i < 16; ++i) setNote(tr, i, i);
+    tr.loopStart = 4; tr.loopEnd = 5;
+    Engine el(*pl);
+    std::vector<int> ln; for (auto& x : ons(run(el, 1.0))) ln.push_back(x.note - 48);
+    CHECK((ln == std::vector<int>{4, 5, 4, 5}));
+    auto s1 = serialize(*pl); auto p2 = std::make_unique<Project>();
+    CHECK(deserialize(s1, *p2) && p2->seqs[0].pat().tracks[0].loopEnd == 5);
+}
+
 int runControllerTests(); // defined in test_controller.cpp
 
 int main() {
@@ -501,6 +567,7 @@ int main() {
     testSaga();
     testPlayer();
     testAccumulatorHarmonizer();
+    testLiveArpLoop();
     failures += runControllerTests();
     if (failures == 0) std::printf("ALL TESTS PASSED\n");
     else std::printf("%d FAILURE(S)\n", failures);

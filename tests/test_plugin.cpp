@@ -123,6 +123,13 @@ int main() {
                 auto& tr = proc.project().seqs[0].pat().tracks[0];
                 for (int i : {2, 5, 7, 11, 13}) { tr.steps[(size_t) i].active = true; tr.steps[(size_t) i].numNotes = 1; tr.steps[(size_t) i].notes[0] = (int8_t) (i % 6); }
             }
+            if (juce::SystemStats::getEnvironmentVariable("TEK_SERVE_KEYS", "").isNotEmpty()) {
+                const juce::SpinLock::ScopedLockType sl(proc.lock);
+                proc.project().seqs[0].scale = 2; // minor
+                proc.controller().button(tek::Btn::Arp, true, 1000); proc.controller().button(tek::Btn::Arp, false, 1010);
+                proc.controller().encoderTurn(0, 1, 1020);
+                proc.controller().padDown(0, 6, 1030); proc.controller().padDown(3, 6, 1030); proc.controller().padDown(7, 6, 1030);
+            }
             ph.playing = true;
             juce::AudioBuffer<float> a2(2, 512);
             const double end = juce::Time::getMillisecondCounterHiRes() + secs * 1000.0;
