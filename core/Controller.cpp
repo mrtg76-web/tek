@@ -50,6 +50,8 @@ void Controller::resetUiState() {
     pendingMode = -1; stepPage = 0; scrollMode = false;
     domOct.fill(0); domVel.fill(3);
     for (auto& d : domLast) d = {0};
+    snapshot.reset(); perfHeld.clear(); perfLoopLen.fill(0); fillLatched.fill(false); loopLatched.fill(false);
+    eng.multiFill.fill(0); eng.matFill.fill(0); eng.seqSolo = 0; eng.rollDiv.fill(0.0);
 }
 
 // ============================================================================ undo
@@ -193,6 +195,7 @@ std::vector<int> Controller::heldStepIndices() const {
 void Controller::padDown(int x, int y, double nowMs) {
     if (x < 0 || x > 15 || y < 0 || y > 7) return;
     if (grid == GridMode::Keys) { keyPad(x, y, true, nowMs); return; }
+    if (grid == GridMode::Perform) { perfPad(x, y, true, nowMs); return; }
     if (loopView && grid == GridMode::Steps) { loopPad(x, y, nowMs); return; }
     if (grid == GridMode::Load) { loadPad(x, y, nowMs); return; }
     if (grid == GridMode::Column) { columnPad(x, y, nowMs); return; }
@@ -201,6 +204,14 @@ void Controller::padDown(int x, int y, double nowMs) {
     if (isMatr()) { matPadDown(x, y, nowMs); return; }
     if (hasKeys()) { domPadDown(x, y, nowMs); return; }
     const int idx = stepAt(x);
+    if (held(Btn::Flow) && !isStoch()) { flowStep(x, y, nowMs); heldPads.push_back({x, y, nowMs, true}); return; }
+    if (held(Btn::Random) && menu == Menu::RandPerf && lanesView() && x == 0) { // exclude a track from random perform
+        int t = 7 - y; seq().rpMask ^= (uint8_t) (1u << t);
+        btnConsumed[(int) Btn::Random] = true;
+        msg("TRACK " + std::to_string(t + 1) + ((seq().rpMask >> t) & 1 ? " EXCLUDED" : " INCLUDED"), nowMs);
+        heldPads.push_back({x, y, nowMs, true});
+        return;
+    }
     // track selection in multitrack lanes (column 1 selects, other columns select + edit)
     if (lanesView() && !held(Btn::Mute)) {
         int t = 7 - y;
@@ -284,6 +295,7 @@ void Controller::padDown(int x, int y, double nowMs) {
 
 void Controller::padUp(int x, int y, double nowMs) {
     if (grid == GridMode::Keys) { keyPad(x, y, false, nowMs); }
+    if (grid == GridMode::Perform) { perfPad(x, y, false, nowMs); }
     for (size_t i = 0; i < heldPads.size(); ++i) {
         auto h = heldPads[i];
         if (h.x != x || h.y != y) continue;
@@ -962,6 +974,14 @@ void Controller::keyPad(int x, int y, bool down, double nowMs) {
     if (!down) {
         for (size_t i = 0; i < keyHeld.size(); ++i) {
             if (keyHeld[i].x != x || keyHeld[i].y != y) continue;
+            if (keyHeld[i].note < 0) { // roller pad released
+                keyHeld.erase(keyHeld.begin() + (long) i);
+                int other = -1; for (auto& k : keyHeld) if (k.note < 0) other = k.y;
+                eng.rollDiv[(size_t) sel] = other >= 0 ? rollBeats(other) : 0.0;
+                if (other < 0 && seq().arp.type == kArpOff)
+                    for (auto& k : keyHeld) if (k.arp) { eng.arpKey(sel, k.note, false); eng.liveNote(k.ch, k.note, seq().kbVel, true); k.arp = false; }
+                return;
+            }
             if (keyHeld[i].arp) eng.arpKey(sel, keyHeld[i].note, false);
             else eng.liveNote(keyHeld[i].ch, keyHeld[i].note, 0, false);
             keyHeld.erase(keyHeld.begin() + (long) i);
@@ -970,6 +990,13 @@ void Controller::keyPad(int x, int y, bool down, double nowMs) {
         return;
     }
     auto& q = seq();
+    if (x == 12 && !isMulti()) { // roller (manual 5.5): hold a rate, held notes retrigger at it
+        eng.rollDiv[(size_t) sel] = rollBeats(y);
+        keyHeld.push_back({x, y, -1, -1, false});
+        for (auto& k : keyHeld) // notes already sounding move to the roller
+            if (k.note >= 0 && !k.arp) { eng.liveNote(k.ch, k.note, 0, false); eng.arpKey(sel, k.note, true); k.arp = true; }
+        return;
+    }
     if (isMulti()) { // drum pads: row = track, column = velocity
         const auto& tr = q.pat().tracks[(size_t) (7 - y)];
         int vel = std::min(127, 8 + x * 8);
@@ -979,7 +1006,7 @@ void Controller::keyPad(int x, int y, bool down, double nowMs) {
     }
     const int note = keyNote(x, y);
     if (note < 0) return;
-    const bool arp = q.arp.type != kArpOff;
+    const bool arp = q.arp.type != kArpOff || eng.rollDiv[(size_t) sel] > 0.0;
     if (arp) eng.arpKey(sel, note, true);
     else eng.liveNote(q.channel, note, q.kbVel, true);
     keyHeld.push_back({x, y, note, (int) q.channel, arp});
@@ -1037,9 +1064,191 @@ void Controller::renderKeys(Frame& f) const {
                 else if (std::find(iv.begin(), iv.end(), rel) != iv.end()) c = rel == 0 ? col : dim(col, 0.55f);
                 else c = 0x501414;
                 if (isHeld(x, y, note)) c = 0xffffff;
-            } else if (x == 12) c = dim(0x40d0ff, 0.15f + 0.1f * (7 - y)); // roller column (phase 3b)
+            } else if (x == 12) { // roller column
+                bool on = false; for (auto& k : keyHeld) if (k.note < 0 && k.y == y) on = true;
+                c = on ? 0xffffff : dim(0x40d0ff, 0.2f + 0.1f * y);
+            }
             f.pads[(size_t) (y * 16 + x)] = c;
         }
+}
+
+double Controller::rollBeats(int row) { // top row = fastest
+    static const double r[8] = {0.125, 0.1875, 0.25, 0.375, 0.5, 0.75, 1.0, 1.5};
+    return r[std::clamp(row, 0, 7)];
+}
+
+// ============================================================================ flow step input (manual 5.4)
+void Controller::flowStep(int x, int y, double nowMs) {
+    btnConsumed[(int) Btn::Flow] = true;
+    pushUndo();
+    Track& tr = lanesView() ? seq().pat().tracks[(size_t) (7 - y)] : track();
+    const int idx = stepAt(x);
+    auto& st = tr.steps[(size_t) idx];
+    if (!st.active) {
+        placeNote(tr, idx, lanesView() ? 0 : degreeAtRow(y));
+        st.trig = Trig {TrigType::Flow, 0, 0};
+        msg("FLOW STEP " + std::to_string(idx + 1), nowMs);
+    } else if (st.trig.type == TrigType::Flow) { st.trig = Trig(); msg("STEP " + std::to_string(idx + 1) + " NORMAL", nowMs); }
+    else { st.trig = Trig {TrigType::Flow, 0, 0}; msg("FLOW STEP " + std::to_string(idx + 1), nowMs); }
+}
+
+// ============================================================================ random perform (manual 5.6)
+void Controller::editRandPerf(int knob, int delta, double nowMs) {
+    auto& q = seq();
+    if (menuPage == 0) {
+        if (knob == 0) q.rpVel = clampT<int8_t>(q.rpVel + delta * 5, -100, 100);
+        if (knob == 1) q.rpOct = clampT<int8_t>(q.rpOct + delta * 5, -100, 100);
+        if (knob == 2) q.rpGate = clampT<int8_t>(q.rpGate + delta * 5, -100, 100);
+        if (knob == 3) q.rpRept = clampT<uint8_t>(q.rpRept + delta * 5, 0, 100);
+    } else {
+        if (knob == 0) q.rpNote = clampT<int8_t>(q.rpNote + delta * 5, -100, 100);
+        if (knob == 1) q.rpTrig = clampT<uint8_t>(q.rpTrig + delta * 5, 0, 100);
+        if (knob == 2) q.rpRetri = clampT<int8_t>(q.rpRetri + delta * 5, -100, 100);
+    }
+    if (heldBtn[(int) Btn::Random]) btnConsumed[(int) Btn::Random] = true;
+    (void) nowMs;
+}
+
+// ============================================================================ perform view (manual 5.7)
+void Controller::perfLoop(int s, int n, bool on) {
+    auto& q = proj.seqs[(size_t) s];
+    auto& pat = q.pat();
+    if (on) {
+        if (perfLoopLen[(size_t) s] == 0)
+            for (int t = 0; t < kNumTracks; ++t) perfLoopSave[(size_t) s][(size_t) t] = {pat.tracks[(size_t) t].loopStart, pat.tracks[(size_t) t].loopEnd};
+        for (int t = 0; t < kNumTracks; ++t) {
+            auto& tr = pat.tracks[(size_t) t];
+            int ph = eng.playhead(s, t);
+            if (ph < tr.start || ph > tr.end) ph = tr.start;
+            tr.loopStart = (uint8_t) ph;
+            tr.loopEnd = (uint8_t) std::min<int>(tr.end, ph + n - 1);
+        }
+        perfLoopLen[(size_t) s] = (uint8_t) n;
+    } else if (perfLoopLen[(size_t) s] != 0) {
+        for (int t = 0; t < kNumTracks; ++t) {
+            pat.tracks[(size_t) t].loopStart = perfLoopSave[(size_t) s][(size_t) t].first;
+            pat.tracks[(size_t) t].loopEnd = perfLoopSave[(size_t) s][(size_t) t].second;
+        }
+        perfLoopLen[(size_t) s] = 0;
+    }
+}
+
+void Controller::perfPad(int x, int y, bool down, double nowMs) {
+    const int s = y;
+    auto& q = proj.seqs[(size_t) s];
+    const bool shift = held(Btn::Shift);
+    if (shift) btnConsumed[(int) Btn::Shift] = true;
+    if (heldBtn[(int) Btn::Perf]) btnConsumed[(int) Btn::Perf] = true;
+    if (!down) { // momentary fills / loops end on release unless latched
+        for (size_t i = 0; i < perfHeld.size(); ++i) {
+            if (perfHeld[i].x != x || perfHeld[i].y != y) continue;
+            bool latched = perfHeld[i].latched;
+            perfHeld.erase(perfHeld.begin() + (long) i);
+            if (latched) break;
+            if (q.mode == Mode::Multi && x >= 8 && x <= 11 && !fillLatched[(size_t) s]) eng.multiFill[(size_t) s] = 0;
+            if (q.mode == Mode::Multi && x >= 12 && !loopLatched[(size_t) s]) perfLoop(s, 0, false);
+            if (q.mode == Mode::Matr && x >= 4 && !fillLatched[(size_t) s]) eng.matFill[(size_t) s] = 0;
+            break;
+        }
+        return;
+    }
+    char buf[48];
+    if (q.mode == Mode::Multi) {
+        if (x < 8) {
+            const int t = x; // column = track
+            if (shift) { eng.soloMask[(size_t) s] ^= (uint8_t) (1u << t); std::snprintf(buf, sizeof buf, "SQ%d T%d SOLO", s + 1, t + 1); }
+            else { auto& tr = q.pat().tracks[(size_t) t]; tr.muted = !tr.muted; std::snprintf(buf, sizeof buf, "SQ%d T%d %s", s + 1, t + 1, tr.muted ? "MUTED" : "ON"); }
+            msg(buf, nowMs);
+            return;
+        }
+        if (x < 12) {
+            const uint8_t f = (uint8_t) (x - 7);
+            if (shift && fillLatched[(size_t) s] && eng.multiFill[(size_t) s] == f) { fillLatched[(size_t) s] = false; eng.multiFill[(size_t) s] = 0; msg("FILL OFF", nowMs); return; }
+            eng.multiFill[(size_t) s] = f;
+            fillLatched[(size_t) s] = shift;
+            perfHeld.push_back({x, y, shift});
+            msg("FILL x" + std::to_string(f + 1) + (shift ? " LATCHED" : ""), nowMs);
+            return;
+        }
+        const int n = 16 - x; // 4, 3, 2, 1 steps
+        if (shift && loopLatched[(size_t) s] && perfLoopLen[(size_t) s] == n) { loopLatched[(size_t) s] = false; perfLoop(s, 0, false); msg("LOOP OFF", nowMs); return; }
+        perfLoop(s, 0, false);
+        perfLoop(s, n, true);
+        loopLatched[(size_t) s] = shift;
+        perfHeld.push_back({x, y, shift});
+        msg("LOOP " + std::to_string(n) + (shift ? " LATCHED" : ""), nowMs);
+        return;
+    }
+    if (q.mode == Mode::Matr) {
+        if (x < 4) {
+            if (shift) { eng.seqSolo ^= (uint8_t) (1u << s); msg(std::string("SQ") + std::to_string(s + 1) + ((eng.seqSolo >> s) & 1 ? " SOLO" : " UNSOLO"), nowMs); return; }
+            auto& mt = q.pat().mat.tracks[(size_t) x]; mt.muted = !mt.muted;
+            std::snprintf(buf, sizeof buf, "SQ%d T%d %s", s + 1, x + 1, mt.muted ? "MUTED" : "ON");
+            msg(buf, nowMs);
+            return;
+        }
+        const uint8_t f = (uint8_t) (x - 3);
+        if (shift && fillLatched[(size_t) s] && eng.matFill[(size_t) s] == f) { fillLatched[(size_t) s] = false; eng.matFill[(size_t) s] = 0; msg("FILL OFF", nowMs); return; }
+        eng.matFill[(size_t) s] = f;
+        fillLatched[(size_t) s] = shift;
+        perfHeld.push_back({x, y, shift});
+        msg("RANDOM FILL " + std::to_string(f * 8) + "%", nowMs);
+        return;
+    }
+    if (x == 0) {
+        if (shift) { eng.seqSolo ^= (uint8_t) (1u << s); msg(std::string("SQ") + std::to_string(s + 1) + ((eng.seqSolo >> s) & 1 ? " SOLO" : " UNSOLO"), nowMs); }
+        else { q.muted = !q.muted; msg(std::string("SQ") + std::to_string(s + 1) + (q.muted ? " MUTED" : " ON"), nowMs); }
+        return;
+    }
+    const int v = x - 8;
+    if (shift) { q.perfRot = (int8_t) v; std::snprintf(buf, sizeof buf, "SQ%d ROTATE %+d", s + 1, v); }
+    else { q.perfTrans = (int8_t) v; std::snprintf(buf, sizeof buf, "SQ%d TRANSPOSE %+d", s + 1, v); }
+    msg(buf, nowMs);
+}
+
+void Controller::renderPerform(Frame& f) const {
+    for (int s = 0; s < kNumSeqs; ++s) {
+        const auto& q = proj.seqs[(size_t) s];
+        const uint32_t col = seqColor(q.color);
+        auto px = [&](int x) -> uint32_t& { return f.pads[(size_t) (s * 16 + x)]; };
+        const bool solo = (eng.seqSolo >> s) & 1;
+        if (q.mode == Mode::Multi) {
+            for (int t = 0; t < 8; ++t) {
+                const auto& tr = q.pat().tracks[(size_t) t];
+                bool so = (eng.soloMask[(size_t) s] >> t) & 1;
+                px(t) = so ? 0xffd000 : tr.muted ? 0x3a0808 : col;
+            }
+            for (int x = 8; x < 12; ++x) px(x) = eng.multiFill[(size_t) s] == x - 7 ? 0xffffff : dim(0xff8000, 0.2f + 0.15f * (x - 8));
+            for (int x = 12; x < 16; ++x) px(x) = perfLoopLen[(size_t) s] == 16 - x ? 0xffffff : dim(0xb070ff, 0.2f + 0.15f * (x - 12));
+            continue;
+        }
+        if (q.mode == Mode::Matr) {
+            for (int t = 0; t < 4; ++t) px(t) = solo ? 0xffd000 : q.pat().mat.tracks[(size_t) t].muted ? 0x3a0808 : col;
+            for (int x = 4; x < 16; ++x) px(x) = eng.matFill[(size_t) s] == x - 3 ? 0xffffff : dim(0xff8000, 0.1f + 0.06f * (x - 4));
+            continue;
+        }
+        px(0) = solo ? 0xffd000 : q.muted ? 0x3a0808 : col;
+        for (int x = 1; x < 16; ++x) {
+            const int v = x - 8;
+            uint32_t c = x == 8 ? 0x505050 : dim(col, 0.12f);
+            if (v == q.perfRot && q.perfRot != 0) c = q.perfRot < 0 ? 0xffd000 : 0xff30ff;
+            if (v == q.perfTrans) c = 0xffffff;
+            px(x) = c;
+        }
+    }
+}
+
+// ============================================================================ snapshots (manual 5.9)
+void Controller::takeSnapshot(double nowMs) {
+    snapshot = std::make_unique<std::array<Sequencer, kNumSeqs>>(proj.seqs);
+    msg("SNAPSHOT TAKEN - LOAD: recall, SHIFT+LOAD: keep", nowMs, 2500.0);
+}
+
+void Controller::endSnapshot(bool restore, double nowMs) {
+    if (!snapshot) return;
+    if (restore) { proj.seqs = *snapshot; msg("SNAPSHOT RECALLED", nowMs); }
+    else msg("SNAPSHOT DISCARDED", nowMs);
+    snapshot.reset();
 }
 
 // ============================================================================ arpeggiator menu (manual 5.3)
@@ -1372,6 +1581,7 @@ void Controller::encoderTurn(int knob, int delta, double nowMs) {
         return;
     }
     if (menu == Menu::Arp && !held(Btn::Shift)) { editArp(knob, delta, nowMs); return; }
+    if (menu == Menu::RandPerf) { editRandPerf(knob, delta, nowMs); return; }
     if (menu != Menu::None && menu != Menu::Arp) { editMenu(knob, delta, nowMs); return; }
     if (held(Btn::Shift)) { btnConsumed[(int) Btn::Shift] = true; editShift(knob, delta, nowMs); return; }
     if (loopView && grid == GridMode::Steps) { editLoop(knob, delta, nowMs); return; }
@@ -1410,6 +1620,12 @@ void Controller::tapKnob(int knob, double nowMs) {
     }
     if (menu == Menu::Setup && menuPage == 0 && knob == 3 && pendingMode >= 0) { changeMode((Mode) pendingMode, nowMs); pendingMode = -1; return; }
     if (menu == Menu::Nudge || menu == Menu::Bend) { knobUpper = !knobUpper; return; }
+    if (menu == Menu::RandPerf) { // tap resets the parameter
+        auto& q = seq();
+        if (menuPage == 0) { if (knob == 0) q.rpVel = 0; if (knob == 1) q.rpOct = 0; if (knob == 2) q.rpGate = 0; if (knob == 3) q.rpRept = 0; }
+        else { if (knob == 0) q.rpNote = 0; if (knob == 1) q.rpTrig = 100; if (knob == 2) q.rpRetri = 0; }
+        return;
+    }
     if (menu == Menu::Arp && menuPage == 0 && knob == 0) { // quick on / off keeping the last type
         auto& a = seq().arp;
         uint8_t& t = seqArpContext() ? a.seqType : a.type;
@@ -1618,6 +1834,8 @@ void Controller::button(Btn b, bool down, double nowMs) {
         if (b == Btn::Copy) stepClipFresh = false;
         if (b == Btn::Track && !btnConsumed[bi] && nowMs - lastTap[(size_t) bi] > 600 && menu == Menu::TrackM) menu = Menu::None; // momentary view
         if (b == Btn::Keyboard && grid == GridMode::Keys && nowMs - keyboardDownMs > 600 && !held(Btn::Shift)) grid = GridMode::Steps; // momentary
+        if (b == Btn::Random && menu == Menu::RandPerf && nowMs - randDownMs > 600) menu = Menu::None; // momentary
+        if (b == Btn::Perf && grid == GridMode::Perform && nowMs - perfDownMs > 600) grid = GridMode::Steps;
         return;
     }
     heldBtn[(size_t) bi] = true;
@@ -1666,6 +1884,7 @@ void Controller::button(Btn b, bool down, double nowMs) {
             else if (menu == Menu::StepM) menuPage = (menuPage + 1) % ((isChord() || hasAcc()) ? 3 : 2);
             else if (menu == Menu::Groove) menuPage = (menuPage + 1) % 2;
             else if (menu == Menu::Arp) menuPage = (menuPage + 1) % 3;
+            else if (menu == Menu::RandPerf) menuPage = (menuPage + 1) % 2;
             else if (menu == Menu::Nudge) menu = Menu::Bend;
             else if (menu == Menu::Bend) menu = Menu::Nudge;
             break;
@@ -1708,7 +1927,10 @@ void Controller::button(Btn b, bool down, double nowMs) {
                 else { for (auto& st : track().steps) st.clear(); msg("CLEAR", nowMs); }
             }
             break;
-        case Btn::Undo: if (shift) doRedo(nowMs); else doUndo(nowMs); break;
+        case Btn::Undo:
+            if (snapshot) { endSnapshot(!shift, nowMs); break; }
+            if (shift) doRedo(nowMs); else doUndo(nowMs);
+            break;
         case Btn::Play:
             if (shift) {
                 tapTimes.push_back(nowMs);
@@ -1732,11 +1954,20 @@ void Controller::button(Btn b, bool down, double nowMs) {
             if (dbl) { eng.panic(); msg("ALL NOTES OFF", nowMs); }
             if (proj.internalClock) eng.setInternalPlaying(false);
             break;
-        case Btn::Load: grid = grid == GridMode::Load ? GridMode::Steps : GridMode::Load; break;
-        case Btn::Save: msg("SAVED WITH THE ABLETON SET", nowMs); break;
+        case Btn::Load:
+            if (snapshot) { endSnapshot(!shift, nowMs); break; }
+            grid = grid == GridMode::Load ? GridMode::Steps : GridMode::Load;
+            break;
+        case Btn::Save:
+            if (held(Btn::Load)) { btnConsumed[(int) Btn::Load] = true; if (grid == GridMode::Load) grid = GridMode::Steps; takeSnapshot(nowMs); break; }
+            msg("SAVED WITH THE ABLETON SET", nowMs);
+            break;
         case Btn::Perf:
             if (shift && isPlayer()) { midiLoadReq = true; midiLoadSeq = sel; msg("CHOOSE A .MID FILE", nowMs); break; }
-            msg(shift ? "PROJECT MENU: PHASE 3 (MIDI file: PLYR mode)" : "PERFORM: COMING IN A LATER PHASE", nowMs);
+            if (shift) { msg("PROJECT MENU: PHASE 3c", nowMs); break; }
+            perfDownMs = nowMs;
+            grid = grid == GridMode::Perform ? GridMode::Steps : GridMode::Perform;
+            if (grid == GridMode::Perform) menu = Menu::None;
             break;
         case Btn::Keyboard:
             if (shift) { previewOn = !previewOn; msg(previewOn ? "PREVIEW ON" : "PREVIEW OFF", nowMs); break; }
@@ -1756,9 +1987,14 @@ void Controller::button(Btn b, bool down, double nowMs) {
             menu = Menu::Arp; menuPage = 0;
             if (!(seq().mode == Mode::Poly || seq().mode == Mode::Chord) && !isMulti()) grid = GridMode::Keys;
             break;
-        case Btn::Gen: case Btn::Mod: case Btn::Arranger:
         case Btn::Random:
             if (isMatr()) { msg("HOLD RANDOM + TAP A LANE PAD", nowMs); break; }
+            if (shift) { msg("GENERATOR: PHASE 3c", nowMs); break; }
+            randDownMs = nowMs;
+            if (menu == Menu::RandPerf) menu = Menu::None;
+            else { menu = Menu::RandPerf; menuPage = 0; if (grid == GridMode::Perform) grid = GridMode::Steps; }
+            break;
+        case Btn::Gen: case Btn::Mod: case Btn::Arranger:
             msg(std::string(btnLabel(b)) + ": COMING IN A LATER PHASE", nowMs);
             break;
         case Btn::Rec:
@@ -1794,7 +2030,7 @@ void Controller::renderDisplay(Frame& f, double nowMs) const {
     std::snprintf(buf, sizeof buf, "S%d %s %d%% %s %s", sel + 1, modeLabel(q.mode), (int) q.pat().swing, follow ? "F" : " ",
                   proj.internalClock ? "INT" : "HOST");
     f.header = buf;
-    std::snprintf(buf, sizeof buf, "%.1f", eng.currentBpm());
+    std::snprintf(buf, sizeof buf, "%s%.1f", snapshot ? "SNAP " : "", eng.currentBpm());
     f.headerRight = buf;
     std::string patTxt = "Pattern " + std::to_string(q.curPattern + 1);
     if (eng.pendingPattern(sel) >= 0) patTxt += " > " + std::to_string(eng.pendingPattern(sel) + 1);
@@ -1900,7 +2136,19 @@ void Controller::renderDisplay(Frame& f, double nowMs) const {
         if (grid == GridMode::Column) f.line2 = columnParam == 0 ? "Velocity editor" : columnParam == 1 ? "Gate editor (top = LEG)" : "Retrig editor (Shift: repeats)";
         if (grid == GridMode::Load) { f.line1 = "LOAD: rows = sequencers, columns = patterns"; f.line2 = "Copy/Paste + pad, Shift + pad = clear"; }
     }
-    if (menu == Menu::Arp) {
+    if (menu == Menu::RandPerf) {
+        auto pm = [](int v) { return v == 0 ? std::string("OFF") : (v > 0 ? "+-" : "-") + std::to_string(std::abs(v)); };
+        f.line1 = "Random Perform  " + std::to_string(menuPage + 1) + "/2";
+        f.line2 = isMulti() ? "+- both ways, - one way  RND+col1: excl." : "+- both ways, - one way only";
+        if (menuPage == 0) set("Vel", pm(q.rpVel), "Oct", pm(q.rpOct), "Gate", pm(q.rpGate), "Rept", q.rpRept ? std::to_string(q.rpRept) + "%" : "OFF");
+        else set("Note", pm(q.rpNote), "Trig", std::to_string(q.rpTrig) + "%", "Retri", q.rpRetri == 0 ? std::string("OFF") : (q.rpRetri > 0 ? "+" : "skip ") + std::to_string(std::abs(q.rpRetri)) + "%", "-", "");
+    } else if (grid == GridMode::Perform && menu == Menu::None) {
+        f.line1 = "PERFORM  rows = SEQ 1-8";
+        if (isMulti()) f.line2 = "1-8 mute 9-12 fill 13-16 loop";
+        else if (isMatr()) f.line2 = "1-4 mute  5-16 random fill";
+        else f.line2 = "1 mute  2-16 transp  Shft: rotate";
+        set("Trans", std::to_string(q.perfTrans), "Rot", std::to_string(q.perfRot), "Solo", eng.seqSolo ? "ON" : "-", "Seq", std::to_string(sel + 1));
+    } else if (menu == Menu::Arp) {
         const auto& a = q.arp;
         const bool sc = seqArpContext();
         const int t = sc ? a.seqType : a.type;
@@ -2103,6 +2351,7 @@ void Controller::render(Frame& f, double nowMs) const {
     }
 
     if (grid == GridMode::Keys) renderKeys(f);
+    else if (grid == GridMode::Perform) renderPerform(f);
     else if (grid == GridMode::Load) renderLoad(f, nowMs);
     else if (grid == GridMode::Column) renderColumn(f);
     else if (lanesView()) renderLanes(f, nowMs);
@@ -2144,7 +2393,14 @@ void Controller::render(Frame& f, double nowMs) const {
     }
     if (loopView) { f.leds[(int) Btn::Init] = f.leds[(int) Btn::End] = 0xffffff; }
     else if (track().hasLoop()) { uint32_t c = std::fmod(nowMs, 600.0) < 300.0 ? 0xb070ff : 0x302040; f.leds[(int) Btn::Init] = f.leds[(int) Btn::End] = c; }
-    if (!undoStack.empty()) f.leds[(int) Btn::Undo] = std::max<uint32_t>(f.leds[(int) Btn::Undo], 0x404040);
+    if (grid == GridMode::Perform) f.leds[(int) Btn::Perf] = 0xffffff;
+    {
+        const auto& q = seq();
+        if (menu == Menu::RandPerf) f.leds[(int) Btn::Random] = 0xffffff;
+        else if (q.rpVel || q.rpOct || q.rpGate || q.rpRept || q.rpNote || q.rpTrig < 100 || q.rpRetri) f.leds[(int) Btn::Random] = 0x806020;
+    }
+    if (snapshot) { uint32_t c = std::fmod(nowMs, 500.0) < 250.0 ? 0x30ff60 : 0x103010; f.leds[(int) Btn::Load] = f.leds[(int) Btn::Undo] = c; }
+    else if (!undoStack.empty()) f.leds[(int) Btn::Undo] = std::max<uint32_t>(f.leds[(int) Btn::Undo], 0x404040);
     if (menu == Menu::Setup || menu == Menu::TrackM || menu == Menu::StepM || menu == Menu::Groove || menu == Menu::Arp || !heldPads.empty())
         f.leds[(int) Btn::Page] = std::fmod(nowMs, 600.0) < 300.0 ? 0xffffff : 0x303030;
 }

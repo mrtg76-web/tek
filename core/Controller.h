@@ -48,8 +48,8 @@ public:
     void showMessage(const std::string& m, double nowMs) { msg(m, nowMs, 2500.0); }
 
 private:
-    enum class Menu { None, Setup, TrackM, StepM, Nudge, Bend, Groove, Arp };
-    enum class GridMode { Steps, Column, Load, Keys };
+    enum class Menu { None, Setup, TrackM, StepM, Nudge, Bend, Groove, Arp, RandPerf };
+    enum class GridMode { Steps, Column, Load, Keys, Perform };
 
     struct HeldPad { int x, y; double downMs; bool consumed; };
 
@@ -106,6 +106,14 @@ private:
     void loopPad(int x, int y, double nowMs);
     void editLoop(int knob, int delta, double nowMs);
     void preview(int note, int ch, int vel);
+    void editRandPerf(int knob, int delta, double nowMs);
+    void flowStep(int x, int y, double nowMs);
+    void perfPad(int x, int y, bool down, double nowMs);
+    void perfLoop(int s, int n, bool on);
+    void renderPerform(Frame& f) const;
+    void takeSnapshot(double nowMs);
+    void endSnapshot(bool restore, double nowMs);
+    static double rollBeats(int row);
     bool seqArpContext() const { return (seq().mode == Mode::Poly || seq().mode == Mode::Chord) && grid != GridMode::Keys; }
     static void editAcc(Step& st, int page, int knob, int delta);
     static std::string chordFromNotes(const int* notes, int n);
@@ -199,6 +207,16 @@ private:
     std::vector<KeyHeld> keyHeld;
     double keyboardDownMs = 0.0;
     int midiLoadSeq = 0;
+    double randDownMs = 0.0, perfDownMs = 0.0;
+    // perform view state
+    struct PerfHeld { int x, y; bool latched; };
+    std::vector<PerfHeld> perfHeld;
+    std::array<uint8_t, kNumSeqs> perfLoopLen {};                     // live loop length per seq (0 = none)
+    std::array<std::array<std::pair<uint8_t, uint8_t>, kNumTracks>, kNumSeqs> perfLoopSave {};
+    std::array<bool, kNumSeqs> fillLatched {}, loopLatched {};
+    std::unique_ptr<std::array<Sequencer, kNumSeqs>> snapshot;     // manual 5.9
+public:
+    bool hasSnapshot() const { return snapshot != nullptr; }
 };
 
 } // namespace tek

@@ -46,6 +46,11 @@ public:
     void arpClear(int seq);
     int arpNotes(int seq, int* out, int max) const;          // currently held / latched arp notes
     int kbTarget = 0;                                        // sequencer receiving MIDI input notes (selected seq)
+    std::array<double, kNumSeqs> rollDiv {};                 // roller interval in beats (0 = off), keyboard view
+    std::array<uint8_t, kNumSeqs> multiFill {};              // perform: multitrack fill intensity 0..4
+    std::array<uint8_t, kNumSeqs> matFill {};                // perform: matriceal trigger fill 0..12
+    uint8_t seqSolo = 0;                                     // perform: soloed sequencers (bit mask)
+    bool seqAudible(int s) const { const auto& q = proj.seqs[(size_t) s]; return q.active && !q.muted && (seqSolo == 0 || (seqSolo >> s) & 1); }
 
     std::atomic<bool> flowHeld { false };
     std::array<uint8_t, kNumSeqs> soloMask {};  // multitrack solo bits (not saved)

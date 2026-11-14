@@ -1,8 +1,35 @@
-# TEK — 8 kanallı performans sequencer'ı (Faz 1–2 tamam, Faz 3a: Keyboard, Loop, Arp)
+# TEK — 8 kanallı performans sequencer'ı (Faz 1–2 tamam, Faz 3a–3b: Keyboard, Loop, Arp, Perform araçları)
 
 TEK, OXI ONE MKII kılavuzunu temel alan bir VST3/AU sequencer plugin'i. Ses üretmiyor, MIDI üretiyor. Ableton'daki synth'leri, drum rack'leri ve harici cihazları sürüyor.
 
-## Faz 3a: Keyboard, Loop, Arpeggiator (yeni)
+## Faz 3b: Flow, Roller, Random Perform, Perform, Snapshot (yeni)
+
+- **Flow step:** FLOW'u basılı tutup bir pad'e dokun. Adım yoksa "Flow" koşullu bir adım oluşur, varsa Flow koşulu açılır/kapanır. Bu adımlar yalnızca FLOW basılıyken çalar.
+- **Roller** (Keyboard görünümü, 13. sütun): Bir roller pad'ini basılı tutarken basılı notalar sürekli tekrar çalar. Hız en üstte 1/32, en altta 1/4 noktalı. Önce nota sonra roller, ya da önce roller sonra nota; ikisi de olur. Transport dururken de çalışır.
+- **Random Perform** (RANDOM: dokun = menüyü aç/kapa, basılı tut = geçici). Pattern değişmez, yalnızca çalış sırasında rastgelelik eklenir.
+  - Sayfa 1: Vel, Oct, Gate, Rept. Sayfa 2: Note, Trig, Retri. Sayfalar arasında PAGE ile geçilir.
+  - "+-" değer iki yöne de sapar. Sola çevirip "-" yaparsan yalnızca aşağı yöne sapar.
+  - Trig, adımın çalma olasılığıdır. Retri "+" ise rastgele retrig ekler, "skip" ise rastgele adım atlatır.
+  - Knoba dokunmak o değeri sıfırlar.
+  - Multitrack'te RANDOM basılıyken 1. sütundaki bir pad o track'i dışarıda bırakır.
+  - Değerlerden biri açıkken RANDOM tuşu turuncu yanar.
+- **Perform görünümü** (PERF: dokun = aç/kapa, basılı tut = geçici). Her satır bir sequencer'dır, SEQ1 en üsttedir.
+  - **Tek track'li modlar:**
+    - 1. sütun mute, SHIFT ile solo.
+    - 2–16. sütunlar transpoze eder: −7…+7 ölçek derecesi, ortadaki gri pad 0'dır.
+    - SHIFT basılıyken aynı sütunlar adım kaydırma (rotate) yapar.
+  - **Multitrack:**
+    - 1–8. sütunlar track mute, SHIFT ile solo.
+    - 9–12. sütunlar fill: basılıyken her adım 2–5 kez tekrar çalar.
+    - 13–16. sütunlar canlı loop: çalan yerden itibaren 4/3/2/1 adım.
+    - SHIFT ile basılırsa kilitlenir; tekrar SHIFT ile basınca bırakılır.
+  - **Matriceal:** 1–4. sütunlar track mute, 5–16. sütunlar rastgele trigger fill (sağa doğru yoğunluk artar).
+- **Snapshot:**
+  - LOAD basılıyken SAVE'e basınca o anki 8 sequencer'ın kopyası alınır. Ekranda "SNAP" yazar, LOAD ve UNDO yeşil yanıp söner.
+  - Ardından istediğin gibi değiştir. LOAD veya UNDO'ya basınca snapshot'a geri döner.
+  - SHIFT+LOAD (veya SHIFT+UNDO) snapshot'ı silip değişiklikleri tutar.
+
+## Faz 3a: Keyboard, Loop, Arpeggiator
 
 **Keyboard görünümü** (KEYBOARD tuşu: dokun = aç/kapa, basılı tut = geçici): Grid bir klavyeye dönüşür.
 - **Düzen:** Satırlar oktav (en alt = temel oktav), 1–12. sütunlar C'den B'ye notalar. Notalar anında çalar; Ableton kayıttayken MIDI olarak kaydedilir.

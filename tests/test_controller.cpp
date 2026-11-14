@@ -317,5 +317,49 @@ int runControllerTests() {
         r.tap(1, 7);                           // normal editing again
         CCHECK(r.tr0().steps[1].active);
     }
+    { // flow steps, random perform menu, perform view, snapshots, roller pads
+        Rig r;
+        r.hold(Btn::Flow); r.tap(2, 7); r.release(Btn::Flow);
+        CCHECK(r.tr0().steps[2].active && r.tr0().steps[2].trig.type == TrigType::Flow);
+        r.press(Btn::Random);
+        Frame f; r.c.render(f, r.t);
+        CCHECK(f.line1.rfind("Random Perform", 0) == 0);
+        r.c.encoderTurn(0, 4, r.t);
+        CCHECK(r.p->seqs[0].rpVel == 20);
+        r.c.encoderPress(0, true, r.t); r.c.encoderPress(0, false, r.t + 50); r.t += 400;
+        CCHECK(r.p->seqs[0].rpVel == 0);
+        r.press(Btn::Random);
+        r.press(Btn::Perf);                    // perform view
+        r.tap(11, 2);                          // seq 3 transpose +3
+        CCHECK(r.p->seqs[2].perfTrans == 3);
+        r.hold(Btn::Shift); r.tap(6, 2); r.release(Btn::Shift);
+        CCHECK(r.p->seqs[2].perfRot == -2);
+        r.tap(0, 4);
+        CCHECK(r.p->seqs[4].muted);
+        r.c.render(f, r.t);
+        CCHECK(f.pads[2 * 16 + 11] == 0xffffff);
+        r.press(Btn::Perf);
+        // snapshot: LOAD + SAVE, edit, LOAD recalls
+        r.hold(Btn::Load); r.press(Btn::Save); r.release(Btn::Load);
+        CCHECK(r.c.hasSnapshot());
+        r.tap(9, 7);
+        CCHECK(r.tr0().steps[9].active);
+        r.press(Btn::Load);
+        CCHECK(!r.c.hasSnapshot() && !r.tr0().steps[9].active && r.p->seqs[2].perfTrans == 3);
+        r.hold(Btn::Load); r.press(Btn::Save); r.release(Btn::Load);
+        r.tap(9, 7);
+        r.hold(Btn::Shift); r.press(Btn::Load); r.release(Btn::Shift); // keep the changes
+        CCHECK(!r.c.hasSnapshot() && r.tr0().steps[9].active);
+        // roller column in the keyboard view
+        r.press(Btn::Keyboard);
+        r.c.padDown(12, 2, r.t);
+        CCHECK(r.e.rollDiv[0] == 0.25);
+        r.c.padDown(0, 7, r.t);
+        int notes[4];
+        CCHECK(r.e.arpNotes(0, notes, 4) == 1);
+        r.c.padUp(12, 2, r.t);
+        CCHECK(r.e.rollDiv[0] == 0.0 && r.e.arpNotes(0, notes, 4) == 0);
+        r.c.padUp(0, 7, r.t);
+    }
     return cfail;
 }

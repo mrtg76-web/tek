@@ -242,6 +242,8 @@ std::string serialize(const Project& p) {
               << (int) a.accent << ' ' << (int) a.len << ' ' << (int) a.puls << ' ' << (int) a.rept << ' ' << (int) a.gtime << ' ' << (int) a.groove << ' '
               << (int) a.reset << ' ' << (int) a.latch << ' ' << (int) a.hold << ' ' << (int) q.kbVel << ' ' << (int) q.kbBase << '\n';
         }
+        o << "RPF " << s << ' ' << (int) q.rpVel << ' ' << (int) q.rpOct << ' ' << (int) q.rpGate << ' ' << (int) q.rpNote << ' ' << (int) q.rpRetri << ' '
+          << (int) q.rpRept << ' ' << (int) q.rpTrig << ' ' << (int) q.rpScope << ' ' << (int) q.rpMask << ' ' << (int) q.perfTrans << ' ' << (int) q.perfRot << '\n';
         o << "SQ2 " << s << ' ' << (int) q.bassMode << ' ' << (int) q.chMx << ' ' << (int) q.voice << ' ' << (int) q.harm << '\n';
         for (int pi = 0; pi < kNumPatterns; ++pi) {
             const auto& pat = q.patterns[(size_t) pi];
@@ -386,6 +388,13 @@ bool deserialize(const std::string& str, Project& p) {
             auto& tr = p.seqs[(size_t) s].patterns[(size_t) pi].tracks[(size_t) t];
             tr.loopStart = clampv<uint8_t>(at(3), 0, 255); tr.loopEnd = clampv<uint8_t>(at(4), 0, 255); tr.loopRate = clampv<uint8_t>(at(5), 0, 255);
             if (tr.hasLoop() && (tr.loopStart >= kMaxSteps || tr.loopEnd >= kMaxSteps || tr.loopEnd < tr.loopStart)) tr.loopStart = tr.loopEnd = 255;
+        } else if (tag == "RPF" && v.size() >= 12) {
+            int s = at(0); if (s < 0 || s >= kNumSeqs) continue;
+            auto& q = p.seqs[(size_t) s];
+            q.rpVel = clampv<int8_t>(at(1), -100, 100); q.rpOct = clampv<int8_t>(at(2), -100, 100); q.rpGate = clampv<int8_t>(at(3), -100, 100);
+            q.rpNote = clampv<int8_t>(at(4), -100, 100); q.rpRetri = clampv<int8_t>(at(5), -100, 100); q.rpRept = clampv<uint8_t>(at(6), 0, 100);
+            q.rpTrig = clampv<uint8_t>(at(7), 0, 100); q.rpScope = clampv<uint8_t>(at(8), 0, 1); q.rpMask = clampv<uint8_t>(at(9), 0, 255);
+            q.perfTrans = clampv<int8_t>(at(10), -7, 7); q.perfRot = clampv<int8_t>(at(11), -7, 7);
         } else if (tag == "ARP" && v.size() >= 17) {
             int s = at(0); if (s < 0 || s >= kNumSeqs) continue;
             auto& q = p.seqs[(size_t) s]; auto& a = q.arp;

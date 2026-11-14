@@ -231,6 +231,12 @@ struct Sequencer {
     int8_t harm = -1;              // harmonizer: -1 off, 0..7 = leader sequencer (scale shown as HARMON)
     uint8_t voice = 1;             // domino: 0 Mono, 1 Poly
     ArpSettings arp;
+    // random perform (manual 5.6): non destructive variations, -100..100 (negative = one sided)
+    int8_t rpVel = 0, rpOct = 0, rpGate = 0, rpNote = 0, rpRetri = 0;
+    uint8_t rpRept = 0, rpTrig = 100, rpScope = 0, rpMask = 0; // rpMask: multitrack tracks excluded
+    // perform view (manual 5.7)
+    int8_t perfTrans = 0;          // -7..7 scale degrees
+    int8_t perfRot = 0;            // -7..7 steps
     uint8_t kbVel = 75;            // keyboard view velocity
     int8_t kbBase = 0;             // keyboard base octave -2..4 (C0 default) (tracks[0] = 32 note steps, tracks[1] = 64 trigger steps)
     bool active = true;            // inactive = transport stopped for this seq

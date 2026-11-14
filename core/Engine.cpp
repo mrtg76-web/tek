@@ -177,6 +177,7 @@ void Engine::recordHarm(int s, const int* notes, int n) {
 
 // Pitch for a scale degree; followers of a harmonizer leader map degrees onto the leader's current chord.
 int Engine::degPitch(const Sequencer& q, int s, int base, int degree) const {
+    if (q.mode != Mode::Multi && q.mode != Mode::Matr) degree += q.perfTrans; // perform transpose (scale degrees)
     if (q.harm >= 0 && q.harm != s) {
         int pcs[8], n = 0;
         const int cnt = harmCount[(size_t) q.harm];
@@ -231,6 +232,7 @@ void Engine::scheduleStep(int s, int t, double grid, double L, double bpm) {
         }
     } else pos = positionFor(tr.dir, rs, re, r.counter);
     r.pos = pos;
+    if (q.perfRot != 0 && len > 0 && q.mode != Mode::Multi) pos = rs + (((pos - rs - q.perfRot) % len) + len) % len; // perform rotate
 
     push({grid, 2, 0, 0, 0, (uint8_t) s, (uint8_t) t, (int16_t) pos});
 
@@ -243,7 +245,7 @@ void Engine::scheduleStep(int s, int t, double grid, double L, double bpm) {
     if (!st.active || st.numNotes == 0) return;
 
     bool fire = evalTrig(st, r, len);
-    if (!q.active || q.muted || st.muted) fire = false;
+    if (!seqAudible(s) || st.muted) fire = false;
     if (q.mode == Mode::Multi) {
         uint8_t solo = soloMask[(size_t) s];
         if (tr.muted) fire = false;
@@ -251,12 +253,36 @@ void Engine::scheduleStep(int s, int t, double grid, double L, double bpm) {
     }
     if (!fire) return;
 
+    // ---- random perform (manual 5.6): temporary variations, the pattern itself is untouched
+    const bool rpOn = (q.mode == Mode::Mono || q.mode == Mode::Poly || q.mode == Mode::Chord || q.mode == Mode::Multi)
+                   && !(q.mode == Mode::Multi && ((q.rpMask >> t) & 1));
+    auto chance = [&](int pct) { return pct > 0 && (int) (rand32() % 100) < pct; };
+    auto bi = [&](int amt) { // amt > 0: -amt..+amt, amt < 0: amt..0 (percent)
+        if (amt == 0) return 0.0;
+        double x = rand01();
+        return amt > 0 ? (x * 2.0 - 1.0) * amt : x * amt;
+    };
+    int rpDeg = 0, nRep = st.repeats, nRetrig = st.retrig;
+    double velMul = 1.0, gateMul = 1.0;
+    if (rpOn) {
+        if (q.rpTrig < 100 && !chance(q.rpTrig)) return;
+        if (q.rpRetri < 0 && chance(-q.rpRetri)) return; // skip
+        velMul = 1.0 + bi(q.rpVel) / 100.0;
+        gateMul = 1.0 + bi(q.rpGate) / 100.0;
+        const int n = (int) scaleLibrary()[q.scale].intervals.size();
+        if (chance(std::abs(q.rpOct))) rpDeg += n * (q.rpOct < 0 ? -1 : ((rand32() & 1) ? 1 : -1));
+        if (chance(std::abs(q.rpNote))) { int d = 1 + (int) (rand32() % 3); rpDeg += q.rpNote < 0 ? -d : ((rand32() & 1) ? d : -d); }
+        if (chance(q.rpRept)) nRep = 2 + (int) (rand32() % 3);
+        if (q.rpRetri > 0 && chance(q.rpRetri)) nRetrig = 2 + (int) (rand32() % 3);
+    }
+    if (q.mode == Mode::Multi && multiFill[(size_t) s] > 0) nRetrig = std::max(nRetrig, multiFill[(size_t) s] + 1); // perform fill
+
     // ---- timing
     double time = grid;
     int swing = (q.mode == Mode::Multi && tr.swing != 0) ? tr.swing : pat.swing;
     if (parity) time += (swing - 50) / 50.0 * L;
     time += st.offset / 100.0 * L;
-    double vel = st.velocity;
+    double vel = st.velocity * velMul;
     if (q.groove > 0) {
         const auto& g = grooveTemplate(q.groove);
         int gl = std::max(1, (int) q.grooveLen);
@@ -272,6 +298,7 @@ void Engine::scheduleStep(int s, int t, double grid, double L, double bpm) {
     if (st.tie > 0) dur = (st.tie + 1) * L - 0.001;
     else if (st.gate >= kGateLegato) dur = L * 1.03;
     else dur = std::max(0.002, st.gate / 100.0 * L);
+    dur = std::max(0.002, dur * gateMul);
 
     // ---- notes: build the voices of this step (pitch, channel, strum delay)
     struct Voice { int note; uint8_t ch; double delay; };
@@ -281,11 +308,11 @@ void Engine::scheduleStep(int s, int t, double grid, double L, double bpm) {
         int n = 0;
         if (q.mode == Mode::Chord) {
             int semis[kMaxChordNotes];
-            int m = buildChord(q.scale, st.notes[0] + degShift, st.chordType, st.voicing, st.spread, semis);
+            int m = buildChord(q.scale, st.notes[0] + degShift + q.perfTrans, st.chordType, st.voicing, st.spread, semis);
             int base = q.baseMidi() + st.octave * 12 + transposeOffset[(size_t) s];
             if (q.bassMode > 0) {
                 uint8_t bch = q.bassMode == 1 ? q.channel : (uint8_t) (q.bassMode - 2);
-                out[n++] = {std::clamp(base + chordRootSemis(q.scale, st.notes[0] + degShift) - 12, 0, 127), bch, 0.0};
+                out[n++] = {std::clamp(base + chordRootSemis(q.scale, st.notes[0] + degShift + q.perfTrans) - 12, 0, 127), bch, 0.0};
             }
             const double strumStep = std::abs(st.strum) / 100.0 * L / std::max(1, m);
             const int first = n;
@@ -318,12 +345,12 @@ void Engine::scheduleStep(int s, int t, double grid, double L, double bpm) {
     };
     // accumulator (mono / poly): target All = step + every repeat, Step = once per trigger, Repeats = repeats only
     const bool accOn = st.accAmt != 0 && (q.mode == Mode::Mono || q.mode == Mode::Poly);
-    const int stepAcc = accOn ? accNext(st, tr, r, pos, st.accTarget != 2) : 0;
+    const int stepAcc = (accOn ? accNext(st, tr, r, pos, st.accTarget != 2) : 0) + rpDeg;
     Voice voices[kMaxChordNotes + 2];
     const int nv = buildVoices(stepAcc, voices);
 
-    if (st.repeats > 1) {
-        const int n = st.repeats;
+    if (nRep > 1) {
+        const int n = nRep;
         const double total = st.repDur * L;
         const double f = 1.0 - st.accel / 100.0;
         double d0 = std::fabs(f - 1.0) < 1e-6 ? total / n : total * (1.0 - f) / (1.0 - std::pow(f, n));
@@ -343,8 +370,8 @@ void Engine::scheduleStep(int s, int t, double grid, double L, double bpm) {
                 for (int k = 0; k < nv; ++k) addVoice(tpos, length, voices[k], v);
             tpos += d; d *= f;
         }
-    } else if (st.retrig > 1) {
-        const int n = st.retrig;
+    } else if (nRetrig > 1) {
+        const int n = nRetrig;
         double span = st.tie > 0 ? dur : std::max(dur, L * 0.5);
         double d = span / n;
         for (int i = 0; i < n; ++i)
@@ -415,7 +442,7 @@ void Engine::playStoch(int s, int pos, double grid, double L, double bpm, bool p
     int total = 0;
     for (auto l : sc.noteLevel) total += l;
     const uint8_t code = sc.rhythm[(size_t) pos];
-    if (code == 0 || code == 99 || total == 0 || !q.active || q.muted) return;
+    if (code == 0 || code == 99 || total == 0 || !seqAudible(s)) return;
 
     double time = grid;
     if (parity) time += (pat.swing - 50) / 50.0 * L;
@@ -423,7 +450,7 @@ void Engine::playStoch(int s, int pos, double grid, double L, double bpm, bool p
     const Step& prof = tr.steps[(size_t) pos]; // velocity / gate profiles drawn in the column editors
     const int vel = prof.velocity;
     const double gate = prof.gate >= kGateLegato ? 1.03 : prof.gate / 100.0;
-    const int note = std::clamp(q.baseMidi() + sc.pitch[(size_t) pos] + transposeOffset[(size_t) s], 0, 127);
+    const int note = std::clamp(q.baseMidi() + sc.pitch[(size_t) pos] + degreeToSemis(q.scale, q.perfTrans) + transposeOffset[(size_t) s], 0, 127);
     auto add = [&](double on, double dur) {
         push({on, 0, q.channel, (uint8_t) note, (uint8_t) std::clamp(vel, 1, 127), (uint8_t) s, 0, 0});
         push({on + std::max(0.002, dur), 1, q.channel, (uint8_t) note, 0, (uint8_t) s, 0, 0});
@@ -438,7 +465,7 @@ void Engine::playMatriceal(int s, int t, double grid, double L, double bpm) {
     auto& q = proj.seqs[(size_t) s];
     auto& mt = q.pat().mat.tracks[(size_t) t];
     auto& r = rt[(size_t) s][(size_t) t];
-    const bool silent = !q.active || q.muted || mt.muted;
+    const bool silent = !seqAudible(s) || mt.muted;
     const bool parity = (r.nextIdx % 2) != 0;
     double time = grid + (parity ? (q.pat().swing - 50) / 50.0 * L : 0.0) + q.nudgeMs / 1000.0 * bpm / 60.0;
 
@@ -485,7 +512,10 @@ void Engine::playMatriceal(int s, int t, double grid, double L, double bpm) {
     r.matActive += L;
     push({grid, 2, 0, 0, 0, (uint8_t) s, (uint8_t) t, (int16_t) lp[kLaneTrig]});
 
-    if (mt.lanes[kLaneTrig].val[(size_t) lp[kLaneTrig]] == 0) return;
+    if (mt.lanes[kLaneTrig].val[(size_t) lp[kLaneTrig]] == 0) {
+        const int fill = matFill[(size_t) s];
+        if (fill == 0 || (int) (rand32() % 100) >= fill * 8) return; // perform: random trigger fill
+    }
     if ((int) (rand32() % 100) >= mt.lanes[kLaneProb].val[(size_t) lp[kLaneProb]]) return;
 
     const int note = value(kLaneNote, true);
@@ -544,7 +574,7 @@ void Engine::playDomino(int s, double grid, double L, double bpm) {
         const int npos = positionFor(noteT.dir == Dir::Random || noteT.dir == Dir::Drunk ? Dir::Forward : noteT.dir, noteT.start, noteT.end, r.domNote);
         push({time + i * d, 4, 0, 0, 0, (uint8_t) s, 0, (int16_t) npos});
         const Step& ns = noteT.steps[(size_t) npos];
-        if (!ns.active || ns.numNotes == 0 || !q.active || q.muted || ns.muted) continue;
+        if (!ns.active || ns.numNotes == 0 || !seqAudible(s) || ns.muted) continue;
         if (ns.trig.type == TrigType::Prob && ns.trig.a < 100 && (int) (rand32() % 100) >= ns.trig.a) continue;
         double on = time + i * d + ns.offset / 100.0 * L;
         double dur;
@@ -594,7 +624,7 @@ void Engine::playSaga(int s, double grid, double L, double bpm) {
     const int pos = order[k];
     push({grid, 2, 0, 0, 0, (uint8_t) s, 0, (int16_t) pos});
     const Step& st = tr.steps[(size_t) pos];
-    if (!st.active || st.numNotes == 0 || !q.active || q.muted || st.muted) return;
+    if (!st.active || st.numNotes == 0 || !seqAudible(s) || st.muted) return;
     if (!evalTrig(st, r, n)) return;
 
     const bool parity = (c % 2) != 0;
@@ -636,14 +666,14 @@ void Engine::playClip(int s, double grid, double L, double bpm) {
     const uint32_t to = from + win;
     r.clipProgressUi = (double) from / clip.lengthTicks;
     push({grid, 2, 0, 0, 0, (uint8_t) s, 0, (int16_t) (from * 16 / clip.lengthTicks)});
-    if (!q.active || q.muted) return;
+    if (!seqAudible(s)) return;
     const double beatsPerTick = L / win;
     const double nudge = q.nudgeMs / 1000.0 * bpm / 60.0;
     // notes are sorted by tick: binary search the window start
     auto it = std::lower_bound(clip.notes.begin(), clip.notes.end(), from, [](const ClipNote& n, uint32_t t) { return n.tick < t; });
     for (; it != clip.notes.end() && it->tick < to; ++it) {
         double on = grid + (it->tick - from) * beatsPerTick + nudge;
-        int note = std::clamp((int) it->note + transposeOffset[(size_t) s], 0, 127);
+        int note = std::clamp((int) it->note + q.perfTrans + transposeOffset[(size_t) s], 0, 127);
         push({on, 0, q.channel, (uint8_t) note, it->vel, (uint8_t) s, 0, 0});
         push({on + std::max<uint32_t>(1, it->len) * beatsPerTick * 0.999, 1, q.channel, (uint8_t) note, 0, (uint8_t) s, 0, 0});
     }
@@ -744,8 +774,9 @@ void Engine::runArps(double from, double to, double bpm) {
         auto& q = proj.seqs[(size_t) s];
         auto& a = arpRt[(size_t) s];
         const auto& set = q.arp;
-        if (set.type == kArpOff || a.nHeld == 0) { a.nextGrid = -1.0; continue; }
-        const double La = divisionBeats(set.div);
+        const bool roll = rollDiv[(size_t) s] > 0.0;
+        if ((set.type == kArpOff && !roll) || a.nHeld == 0) { a.nextGrid = -1.0; continue; }
+        const double La = roll ? rollDiv[(size_t) s] : divisionBeats(set.div);
         if (a.nextGrid < 0.0) { a.nextGrid = std::ceil(from / La - 1e-7) * La; a.tick = 0; a.grooveBase = 0; a.pos = 0; a.repLeft = 0; }
         if (a.changed) {
             a.changed = false;
@@ -758,6 +789,16 @@ void Engine::runArps(double from, double to, double bpm) {
             const double g = a.nextGrid;
             a.nextGrid += La;
             const int64_t t = a.tick++;
+            if (roll) { // roller: every held note retriggers at the roll interval
+                if (!seqAudible(s)) continue;
+                const uint8_t rch = q.mode == Mode::Multi ? q.pat().tracks[0].channel : q.channel;
+                for (int i = 0; i < a.nHeld; ++i) {
+                    int nn = std::clamp(a.held[i] + transposeOffset[(size_t) s], 0, 127);
+                    push({g, 0, rch, (uint8_t) nn, q.kbVel, (uint8_t) s, 0, 0});
+                    push({g + La * 0.5, 1, rch, (uint8_t) nn, 0, (uint8_t) s, 0, 0});
+                }
+                continue;
+            }
             // euclidean gate: pulses spread over len steps, plus repeats after each pulse
             const int len = std::max<int>(1, set.len), puls = std::clamp<int>(set.puls, 1, len);
             const int ep = (int) (t % len);
@@ -765,7 +806,7 @@ void Engine::runArps(double from, double to, double bpm) {
             bool fire = pulse;
             if (pulse) a.repLeft = set.rept;
             else if (a.repLeft > 0) { a.repLeft--; fire = true; }
-            if (!fire || !q.active || q.muted) continue;
+            if (!fire || !seqAudible(s)) continue;
             const int pn = buildArpPattern(set, set.type, a.held, a.nHeld, pat, s);
             if (pn <= 0) continue;
             const int note = std::clamp(pat[a.pos % pn] + transposeOffset[(size_t) s], 0, 127);

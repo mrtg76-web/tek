@@ -130,6 +130,17 @@ int main() {
                 proc.controller().encoderTurn(0, 1, 1020);
                 proc.controller().padDown(0, 6, 1030); proc.controller().padDown(3, 6, 1030); proc.controller().padDown(7, 6, 1030);
             }
+            if (juce::SystemStats::getEnvironmentVariable("TEK_SERVE_PERF", "").isNotEmpty()) {
+                const juce::SpinLock::ScopedLockType sl(proc.lock);
+                auto& c = proc.controller();
+                proc.project().seqs[1].mode = tek::Mode::Multi;
+                proc.project().seqs[3].mode = tek::Mode::Matr;
+                c.button(tek::Btn::Perf, true, 1000); c.button(tek::Btn::Perf, false, 1010);
+                c.padDown(11, 0, 1020); c.padUp(11, 0, 1030);
+                c.button(tek::Btn::Shift, true, 1040); c.padDown(6, 0, 1050); c.padUp(6, 0, 1060); c.button(tek::Btn::Shift, false, 1070);
+                c.padDown(2, 1, 1080); c.padUp(2, 1, 1090);
+                c.padDown(0, 5, 1100); c.padUp(0, 5, 1110);
+            }
             ph.playing = true;
             juce::AudioBuffer<float> a2(2, 512);
             const double end = juce::Time::getMillisecondCounterHiRes() + secs * 1000.0;

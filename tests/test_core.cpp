@@ -565,6 +565,78 @@ static void testLiveArpLoop() {
     CHECK(deserialize(s1, *p2) && p2->seqs[0].pat().tracks[0].loopEnd == 5);
 }
 
+static void testPerformTools() {
+    // perform transpose (scale degrees) and rotate
+    {
+        auto p = std::make_unique<Project>();
+        auto& tr = p->seqs[0].pat().tracks[0];
+        for (int i = 0; i < 4; ++i) setNote(tr, i, i);
+        tr.end = 3;
+        p->seqs[0].perfTrans = 2;            // chromatic default: +2 degrees = +2 semitones
+        Engine e(*p);
+        std::vector<int> n; for (auto& x : ons(run(e, 1.0))) n.push_back(x.note - 48);
+        CHECK((n == std::vector<int>{2, 3, 4, 5}));
+        p->seqs[0].perfTrans = 0; p->seqs[0].perfRot = 1; // shift right by one step
+        Engine e2(*p);
+        n.clear(); for (auto& x : ons(run(e2, 1.0))) n.push_back(x.note - 48);
+        CHECK((n == std::vector<int>{3, 0, 1, 2}));
+    }
+    // random perform: trig 0% silences, vel spread stays in range, one-sided octave goes down only
+    {
+        auto p = std::make_unique<Project>();
+        auto& tr = p->seqs[0].pat().tracks[0];
+        for (int i = 0; i < 16; ++i) setNote(tr, i, 0, 100);
+        p->seqs[0].rpTrig = 0;
+        Engine e(*p);
+        CHECK(ons(run(e, 4.0)).empty());
+        p->seqs[0].rpTrig = 100; p->seqs[0].rpVel = 50; p->seqs[0].rpOct = -100;
+        Engine e2(*p);
+        auto n = ons(run(e2, 4.0));
+        CHECK(n.size() == 16);
+        bool velOk = true, varied = false, octOk = true;
+        for (auto& x : n) { velOk &= x.vel >= 49 && x.vel <= 127; varied |= x.vel != 100; octOk &= x.note == 36; }
+        CHECK(velOk && varied && octOk);
+        auto s1 = serialize(*p); auto p2 = std::make_unique<Project>();
+        CHECK(deserialize(s1, *p2) && p2->seqs[0].rpVel == 50 && p2->seqs[0].rpOct == -100);
+    }
+    // sequencer solo
+    {
+        auto p = std::make_unique<Project>();
+        setNote(p->seqs[0].pat().tracks[0], 0, 0);
+        setNote(p->seqs[1].pat().tracks[0], 0, 0);
+        p->seqs[1].channel = 1;
+        Engine e(*p);
+        e.seqSolo = 2;
+        auto n = ons(run(e, 0.25));
+        CHECK(n.size() == 1 && n[0].ch == 1);
+    }
+    // multitrack fill retriggers every step
+    {
+        auto p = std::make_unique<Project>();
+        p->seqs[0].mode = Mode::Multi;
+        setNote(p->seqs[0].pat().tracks[0], 0, 0);
+        Engine e(*p);
+        e.multiFill[0] = 3;               // x4
+        CHECK(ons(run(e, 0.25)).size() == 4);
+    }
+    // roller: held notes retrigger at the roll rate, also while stopped
+    {
+        auto p = std::make_unique<Project>();
+        Engine e(*p); e.prepare(48000);
+        e.rollDiv[0] = 0.25;
+        e.arpKey(0, 60, true); e.arpKey(0, 64, true);
+        int ons = 0, bal = 0;
+        for (int b = 0; b < 47; ++b) { // ~1 beat at 120 bpm, stopped
+            std::vector<MidiIn> in; std::vector<MidiOut> out;
+            Transport tp; tp.playing = false; tp.bpm = 120;
+            if (b == 46) { e.arpKey(0, 60, false); e.arpKey(0, 64, false); }
+            e.process(tp, 512, in, out);
+            for (auto& m : out) { if ((m.status & 0xf0) == 0x90) { ++ons; ++bal; } if ((m.status & 0xf0) == 0x80) --bal; }
+        }
+        CHECK(ons >= 6 && ons % 2 == 0); // both notes together, ~4 hits
+    }
+}
+
 int runControllerTests(); // defined in test_controller.cpp
 
 int main() {
@@ -586,6 +658,7 @@ int main() {
     testPlayer();
     testAccumulatorHarmonizer();
     testLiveArpLoop();
+    testPerformTools();
     failures += runControllerTests();
     if (failures == 0) std::printf("ALL TESTS PASSED\n");
     else std::printf("%d FAILURE(S)\n", failures);
