@@ -61,8 +61,8 @@ public:
     static constexpr int kTemplateSlots = 32;
 
 private:
-    enum class Menu { None, Setup, TrackM, StepM, Nudge, Bend, Groove, Arp, RandPerf, Gen, RandGen, RecSet, Project, Lfo, Matrix, Quick };
-    enum class GridMode { Steps, Column, Load, Keys, Perform, Save, Mod };
+    enum class Menu { None, Setup, TrackM, StepM, Nudge, Bend, Groove, Arp, RandPerf, Gen, RandGen, RecSet, Project, Lfo, Matrix, Quick, Drum };
+    enum class GridMode { Steps, Column, Load, Keys, Perform, Save, Mod, Arr };
 
     struct HeldPad { int x, y; double downMs; bool consumed; };
 
@@ -144,6 +144,13 @@ private:
     int quickDest(int knob) const;
     void quickAssignSource();
     void editQuick(int knob, int delta, double nowMs);
+    // arranger (manual 8.x) + drum generator (6.6)
+    void arrPadDown(int x, int y, double nowMs);
+    void editArr(int knob, int delta, double nowMs);
+    void arrKnobTap(int knob, double nowMs);
+    void renderArr(Frame& f, double nowMs) const;
+    void renderArrDisplay(Frame& f) const;
+    void editDrum(int knob, int delta);
     void renderSave(Frame& f, double nowMs) const;
     void editRandPerf(int knob, int delta, double nowMs);
     void flowStep(int x, int y, double nowMs);
@@ -268,6 +275,9 @@ private:
     std::unique_ptr<ModLane> laneClip;
     int qaDest = 0, qaSrc = 0, qaAmt = 50, qaOff = 0; Menu qaReturn = Menu::None; int qaReturnPage = 0;
     struct LastTap modLastTap;
+    bool arrPicker = false;
+    int arrColPg = 0, arrCopyTo = 1, drumTrack = 0;
+    std::unique_ptr<ArrCell> arrClip;
     std::vector<Job> jobs;
 public:
     bool hasSnapshot() const { return snapshot != nullptr; }

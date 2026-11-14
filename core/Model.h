@@ -190,7 +190,7 @@ constexpr int kNumModLanes = 8, kNumLfos = 2, kNumModMaps = 8;
 enum ModDest : uint8_t { MD_Off = 0, MD_Vel, MD_Pitch, MD_Oct, MD_Gate, MD_Rept, MD_Trig, MD_Div, MD_GrvVel, MD_GrvTime,
                          MD_ArpDiv, MD_ArpGate, MD_ArpOct, MD_ArpAccent, MD_Lfo1Rate, MD_Lfo1Amt, MD_Lfo2Rate, MD_Lfo2Amt,
                          MD_RpVel, MD_RpOct, MD_RpGate, MD_RpNote, MD_RpTrig, MD_ChType, MD_ChVoic, MD_ChSpread, MD_ChStrum,
-                         MD_AccAmt, MD_Count };
+                         MD_AccAmt, MD_DrKick, MD_DrSnare, MD_DrHat, MD_DrX, MD_DrY, MD_DrChaos, MD_Count };
 const char* modDestLabel(int d);
 // MIDI output destination: 0 Off, 1..128 = CC 0..127, 129 Pitch Bend, 130 Aftertouch, 131 Program Change
 constexpr int kModOutPB = 129, kModOutAT = 130, kModOutPC = 131, kModOutCount = 132;
@@ -284,6 +284,15 @@ const char* genOrderLabel(int v);
 const char* genLockLabel(int v);
 std::string randDenLabel(int v);
 
+// Multitrack drum generator (manual 6.6): tracks 1-3 = kick / snare / hat engines, non destructive
+struct DrumGen {
+    std::array<bool, 3> on {};
+    std::array<uint8_t, 3> dens { {64, 64, 64} }; // 0..127
+    uint8_t x = 0, y = 64, chaos = 5;            // 0..127
+};
+// 0..255 trigger likelihood of a 32 step position for an engine at map position x, y (0..127)
+int drumLevel(int engine, int step, int x, int y);
+
 struct Sequencer {
     Mode mode = Mode::Mono;
     uint8_t channel = 0;           // 0..15 (mono/poly)
@@ -313,6 +322,7 @@ struct Sequencer {
     GenSettings gen;
     RandGenSettings rgen;
     std::array<Lfo, kNumLfos> lfo;
+    DrumGen drum;
     std::array<ModMap, kNumModMaps> maps;
     uint8_t kbVel = 75;            // keyboard view velocity
     int8_t kbBase = 0;             // keyboard base octave -2..4 (C0 default) (tracks[0] = 32 note steps, tracks[1] = 64 trigger steps)
@@ -333,6 +343,24 @@ struct Sequencer {
     int baseMidi() const { return (baseOctave + 2) * 12 + rootPc; }
 };
 
+// ---------------------------------------------------------------- arranger (manual 8.x)
+constexpr int kNumSongs = 4, kArrSlots = 32, kArrInf = 20;
+struct ArrCell {
+    int8_t pat = -1;               // -1 empty (skipped), -2 blank (holds silently), 0..15 pattern
+    uint8_t rept = 1;              // 0 Off (skipped), 1..19, kArrInf = infinite
+    uint8_t next = 0;              // 0 Next, 1 Prev, 2 First, 3 Random, 4 Other
+    uint8_t pc = 0, bank = 0;      // 0 = use the pattern's setting, 1 = off, 2..129 = value 1..128
+    bool playable() const { return pat != -1 && rept != 0; }
+};
+struct Song {
+    std::array<std::array<ArrCell, kArrSlots>, kNumSeqs> lanes {};
+    int8_t master = -1;            // -1 off, else the lane driving the others
+    bool isEmpty() const;
+};
+const char* arrNextLabel(int v);
+const char* arrQuantLabel(int v);
+double arrQuantBeats(int v);       // 0 = pattern end
+
 enum class OutputMode : uint8_t { Host = 0, Port, Both, Count };
 inline const char* outputModeLabel(OutputMode m) {
     switch (m) { case OutputMode::Host: return "HOST"; case OutputMode::Port: return "PORT"; case OutputMode::Both: return "BOTH"; default: return "?"; }
@@ -352,6 +380,14 @@ struct Project {
     uint8_t recCountIn = 0;        // 0 Off, 1 Beat, 2 1/2 Bar, 3 Bar, 4 2 Bars
     uint8_t metroCh = 0;           // 0 off, 1..16 MIDI channel for the metronome
     uint8_t metroMode = 0;         // 0 Always while recording, 1 count-in only
+    // arranger
+    std::array<Song, kNumSongs> songs {};
+    uint8_t curSong = 0;
+    bool arrOn = false;            // armed (manual 8.5); disarms when the transport stops
+    uint8_t arrQuant = 2;          // 0 P.End, 1 1/2 Bar, 2 1 Bar, 3 2, 4 4, 5 8, 6 16, 7 32 Bars
+    uint8_t arrDefRept = 1;
+    Song& song() { return songs[curSong]; }
+    const Song& song() const { return songs[curSong]; }
 
     Project() { reset(); }
     void reset();

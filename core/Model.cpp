@@ -134,6 +134,8 @@ void Project::reset() {
     internalClock = false;
     output = OutputMode::Both;
     scaleMaster = -1;
+    for (auto& sg : songs) sg = Song();
+    curSong = 0; arrOn = false; arrQuant = 2; arrDefRept = 1;
     recQt = true; recQtPct = 100; recOvdb = true; recMode = 0; recCountIn = 0; metroCh = 0; metroMode = 0;
 }
 
@@ -232,7 +234,8 @@ static bool stepIsDefault(const Step& s) {
 const char* modDestLabel(int d) {
     static const char* l[] = {"OFF", "Vel", "Pitch", "Oct", "Gate", "Rept", "Trig%", "Div", "GrvVel", "GrvTim",
                               "ArpDiv", "ArpGat", "ArpOct", "ArpAcc", "L1Rate", "L1Amt", "L2Rate", "L2Amt",
-                              "RpVel", "RpOct", "RpGate", "RpNote", "RpTrig", "ChType", "ChVoic", "ChSprd", "ChStrm", "AccAmt"};
+                              "RpVel", "RpOct", "RpGate", "RpNote", "RpTrig", "ChType", "ChVoic", "ChSprd", "ChStrm", "AccAmt",
+                              "DrKick", "DrSnar", "DrHat", "DrX", "DrY", "DrChao"};
     return (d >= 0 && d < MD_Count) ? l[d] : "?";
 }
 std::string modOutLabel(int v) {
@@ -263,6 +266,44 @@ std::string lfoRateLabel(int r) {
     char b[16]; std::snprintf(b, sizeof b, "%.2fHz", lfoHz(r)); return b;
 }
 
+// ---------------------------------------------------------------- arranger
+bool Song::isEmpty() const { for (auto& l : lanes) for (auto& c : l) if (c.pat != -1) return false; return true; }
+const char* arrNextLabel(int v) { static const char* l[] = {"Next", "Prev", "1st", "Rnd", "Othr"}; return l[std::clamp(v, 0, 4)]; }
+const char* arrQuantLabel(int v) { static const char* l[] = {"P.End", "1/2Bar", "1Bar", "2Bar", "4Bar", "8Bar", "16Bar", "32Bar"}; return l[std::clamp(v, 0, 7)]; }
+double arrQuantBeats(int v) { static const double b[] = {0, 2, 4, 8, 16, 32, 64, 128}; return b[std::clamp(v, 0, 7)]; }
+
+// ---------------------------------------------------------------- drum generator rhythm maps (own design)
+// Four 32 step "corner" rhythms per engine, blended by X / Y. Values: 255 main hit, ~170 secondary, ~90 ghost.
+int drumLevel(int engine, int step, int x, int y) {
+    using Row = std::array<uint8_t, 32>;
+    auto R = [](std::initializer_list<std::pair<int, int>> hits, int floorv) {
+        Row r; r.fill((uint8_t) floorv);
+        for (auto& h : hits) r[(size_t) h.first] = (uint8_t) h.second;
+        return r;
+    };
+    static const Row maps[3][4] = {
+        { // kick: four on the floor, broken beat, half time, busy
+          R({{0, 255}, {8, 255}, {16, 255}, {24, 255}, {14, 90}, {30, 110}, {22, 60}}, 12),
+          R({{0, 255}, {10, 230}, {16, 200}, {19, 120}, {26, 170}, {6, 80}, {30, 70}}, 15),
+          R({{0, 255}, {20, 210}, {11, 90}, {27, 80}}, 10),
+          R({{0, 255}, {3, 140}, {8, 220}, {11, 120}, {16, 255}, {19, 150}, {24, 220}, {27, 120}, {30, 160}}, 30) },
+        { // snare: backbeat, backbeat + ghosts, half time, rolls
+          R({{8, 255}, {24, 255}, {30, 70}}, 8),
+          R({{8, 255}, {24, 255}, {14, 110}, {22, 95}, {30, 120}, {5, 70}, {19, 70}}, 20),
+          R({{16, 255}, {29, 120}, {12, 60}}, 8),
+          R({{8, 255}, {24, 255}, {28, 190}, {29, 170}, {30, 200}, {31, 160}, {12, 120}, {20, 110}}, 40) },
+        { // hat: 8ths, 16ths with accents, off beats, shuffle
+          R({{0, 220}, {4, 220}, {8, 220}, {12, 220}, {16, 220}, {20, 220}, {24, 220}, {28, 220}}, 40),
+          R({{0, 255}, {2, 150}, {4, 220}, {6, 150}, {8, 255}, {10, 150}, {12, 220}, {14, 150}, {16, 255}, {18, 150}, {20, 220}, {22, 150}, {24, 255}, {26, 150}, {28, 220}, {30, 150}}, 90),
+          R({{2, 255}, {6, 255}, {10, 255}, {14, 255}, {18, 255}, {22, 255}, {26, 255}, {30, 255}}, 25),
+          R({{0, 230}, {3, 160}, {4, 200}, {7, 160}, {8, 230}, {11, 160}, {12, 200}, {15, 160}, {16, 230}, {19, 160}, {20, 200}, {23, 160}, {24, 230}, {27, 160}, {28, 200}, {31, 160}}, 50) } };
+    const auto& m = maps[std::clamp(engine, 0, 2)];
+    const int i = ((step % 32) + 32) % 32;
+    const double fx = std::clamp(x, 0, 127) / 127.0, fy = std::clamp(y, 0, 127) / 127.0;
+    const double top = m[0][(size_t) i] * (1 - fx) + m[1][(size_t) i] * fx, bot = m[2][(size_t) i] * (1 - fx) + m[3][(size_t) i] * fx;
+    return (int) std::lround(top * (1 - fy) + bot * fy);
+}
+
 const char* genLogicLabel(int v) { static const char* l[] = {"OR", "AND", "XOR", "Accnt"}; return l[v & 3]; }
 const char* genOrderLabel(int v) { static const char* l[] = {"Lin", "Rnd", "PingP", "Shuf"}; return l[v & 3]; }
 const char* genLockLabel(int v) { static const char* l[] = {"OFF", "Pitch", "Rhythm", "Both"}; return l[v & 3]; }
@@ -276,6 +317,19 @@ std::string serialize(const Project& p, int onlySeq, int onlyPattern) {
     std::ostringstream o;
     o << "TEK 1\n";
     o << "PRJ " << (int) (p.bpm * 10.0 + 0.5) << ' ' << (int) p.internalClock << ' ' << (int) p.output << ' ' << (int) p.scaleMaster << '\n';
+    o << "ARR " << (int) p.curSong << ' ' << (int) p.arrQuant << ' ' << (int) p.arrDefRept << '\n';
+    if (onlySeq < 0)
+        for (int sg = 0; sg < kNumSongs; ++sg) {
+            const auto& song = p.songs[(size_t) sg];
+            if (song.isEmpty() && song.master < 0) continue;
+            o << "SNG " << sg << ' ' << (int) song.master << '\n';
+            for (int l = 0; l < kNumSeqs; ++l)
+                for (int c = 0; c < kArrSlots; ++c) {
+                    const auto& a = song.lanes[(size_t) l][(size_t) c];
+                    if (a.pat == -1 && a.rept == 1 && a.next == 0 && a.pc == 0 && a.bank == 0) continue;
+                    o << "SC2 " << sg << ' ' << l << ' ' << c << ' ' << (int) a.pat << ' ' << (int) a.rept << ' ' << (int) a.next << ' ' << (int) a.pc << ' ' << (int) a.bank << '\n';
+                }
+        }
     o << "REC " << (int) p.recQt << ' ' << (int) p.recQtPct << ' ' << (int) p.recOvdb << ' ' << (int) p.recMode << ' ' << (int) p.recCountIn
       << ' ' << (int) p.metroCh << ' ' << (int) p.metroMode << '\n';
     for (int s = 0; s < kNumSeqs; ++s) {
@@ -314,6 +368,12 @@ std::string serialize(const Project& p, int onlySeq, int onlyPattern) {
             if (m.type == 0 && m.ccOut == 0 && m.int1 == 0 && m.int2 == 0 && m.par == 0) continue;
             o << "MM " << s << ' ' << i << ' ' << (int) m.type << ' ' << (int) m.num << ' ' << (int) m.chan << ' ' << (int) m.ccOut << ' '
               << (int) m.amt1 << ' ' << (int) m.off1 << ' ' << (int) m.int1 << ' ' << (int) m.int2 << ' ' << (int) m.amt2 << ' ' << (int) m.off2 << ' ' << (int) m.par << '\n';
+        }
+        {
+            const auto& d = q.drum;
+            if (d.on[0] || d.on[1] || d.on[2] || d.dens[0] != 64 || d.dens[1] != 64 || d.dens[2] != 64 || d.x || d.y != 64 || d.chaos != 5)
+                o << "DG " << s << ' ' << (int) d.on[0] << ' ' << (int) d.on[1] << ' ' << (int) d.on[2] << ' ' << (int) d.dens[0] << ' ' << (int) d.dens[1]
+                  << ' ' << (int) d.dens[2] << ' ' << (int) d.x << ' ' << (int) d.y << ' ' << (int) d.chaos << '\n';
         }
         o << "SQ2 " << s << ' ' << (int) q.bassMode << ' ' << (int) q.chMx << ' ' << (int) q.voice << ' ' << (int) q.harm << '\n';
         for (int pi = 0; pi < kNumPatterns; ++pi) {
@@ -430,6 +490,22 @@ bool deserialize(const std::string& str, Project& p) {
             p.recQt = at(0) != 0; p.recQtPct = clampv<uint8_t>(at(1), 0, 100); p.recOvdb = at(2) != 0;
             p.recMode = clampv<uint8_t>(at(3), 0, 2); p.recCountIn = clampv<uint8_t>(at(4), 0, 4);
             p.metroCh = clampv<uint8_t>(at(5), 0, 16); p.metroMode = clampv<uint8_t>(at(6), 0, 1);
+        } else if (tag == "ARR" && v.size() >= 3) {
+            p.curSong = clampv<uint8_t>(at(0), 0, kNumSongs - 1); p.arrQuant = clampv<uint8_t>(at(1), 0, 7); p.arrDefRept = clampv<uint8_t>(at(2), 1, kArrInf);
+        } else if (tag == "SNG" && v.size() >= 2) {
+            int sg = at(0); if (sg < 0 || sg >= kNumSongs) continue;
+            p.songs[(size_t) sg].master = clampv<int8_t>(at(1), -1, kNumSeqs - 1);
+        } else if (tag == "SC2" && v.size() >= 8) {
+            int sg = at(0), l = at(1), c = at(2);
+            if (sg < 0 || sg >= kNumSongs || l < 0 || l >= kNumSeqs || c < 0 || c >= kArrSlots) continue;
+            auto& a = p.songs[(size_t) sg].lanes[(size_t) l][(size_t) c];
+            a.pat = clampv<int8_t>(at(3), -2, kNumPatterns - 1); a.rept = clampv<uint8_t>(at(4), 0, kArrInf);
+            a.next = clampv<uint8_t>(at(5), 0, 4); a.pc = clampv<uint8_t>(at(6), 0, 129); a.bank = clampv<uint8_t>(at(7), 0, 129);
+        } else if (tag == "DG" && v.size() >= 10) {
+            int s = at(0); if (s < 0 || s >= kNumSeqs) continue;
+            auto& d = p.seqs[(size_t) s].drum;
+            for (int k = 0; k < 3; ++k) { d.on[(size_t) k] = at(1 + (size_t) k) != 0; d.dens[(size_t) k] = clampv<uint8_t>(at(4 + (size_t) k), 0, 127); }
+            d.x = clampv<uint8_t>(at(7), 0, 127); d.y = clampv<uint8_t>(at(8), 0, 127); d.chaos = clampv<uint8_t>(at(9), 0, 127);
         } else if (tag == "LF" && v.size() >= 10) {
             int s = at(0), i = at(1); if (s < 0 || s >= kNumSeqs || i < 0 || i >= kNumLfos) continue;
             auto& l = p.seqs[(size_t) s].lfo[(size_t) i];

@@ -889,6 +889,77 @@ static void testModulation() {
     }
 }
 
+static void testArrangerDrums() {
+    // lane walks its slots: P2 x2, P4 x1 (next = first) -> P2 ...
+    {
+        auto p = std::make_unique<Project>();
+        auto& c = p->song().lanes[0];
+        c[0].pat = 1; c[0].rept = 2;
+        c[1].pat = 3; c[1].rept = 1; c[1].next = 2;
+        p->arrOn = true;
+        Engine e(*p);
+        std::vector<int> pats; int last = -1;
+        runHook(e, 16.5, [&](double) { const int cp = p->seqs[0].curPattern; if (cp != last) { pats.push_back(cp); last = cp; } });
+        CHECK((pats.size() >= 4 && pats[0] == 0 && pats[1] == 1 && pats[2] == 3 && pats[3] == 1));
+        // stop disarms
+        std::vector<MidiIn> in; std::vector<MidiOut> out; Transport t; t.playing = false; e.process(t, 256, in, out);
+        CHECK(!p->arrOn && !e.arrPlaying());
+    }
+    // blank slot holds silently for its bar; lanes without slots are silent
+    {
+        auto p = std::make_unique<Project>();
+        setNote(p->seqs[0].pat().tracks[0], 0, 0);
+        setNote(p->seqs[1].pat().tracks[0], 0, 0); p->seqs[1].channel = 1;
+        auto& c = p->song().lanes[0];
+        c[0].pat = -2; c[0].rept = 1; c[1].pat = 0; c[1].rept = kArrInf;
+        p->arrOn = true;
+        Engine e(*p);
+        auto n = ons(runHook(e, 8.0, [](double) {}));
+        bool early = false, later = false, other = false;
+        for (auto& x : n) { if (x.ch == 1) other = true; else if (x.ppq < 3.9) early = true; else later = true; }
+        CHECK(!early && later && !other);
+    }
+    // master lane moves every lane's column; manual cue
+    {
+        auto p = std::make_unique<Project>();
+        auto& s = p->song();
+        s.master = 1;
+        s.lanes[1][0].pat = 0; s.lanes[1][0].rept = 1; s.lanes[1][1].pat = 0; s.lanes[1][1].rept = kArrInf;
+        s.lanes[0][0].pat = 2; s.lanes[0][0].rept = kArrInf; s.lanes[0][1].pat = 5; s.lanes[0][1].rept = 7;
+        s.lanes[0][3].pat = 9;
+        p->arrOn = true;
+        Engine e(*p);
+        bool cued = false;
+        runHook(e, 6.5, [&](double ppq) { if (ppq > 4.5 && !cued) { e.arrCue(1, 3); cued = true; } });
+        CHECK(p->seqs[0].curPattern == 5 && e.arrSlot(0) == 1);
+        runHook(e, 9.0, [&](double) {}); // runHook restarts at 0: the arranger restarts too
+        Engine e2(*p); p->arrOn = true; bool c2 = false;
+        runHook(e2, 9.0, [&](double ppq) { if (ppq > 4.5 && !c2) { e2.arrCue(1, 3); c2 = true; } });
+        CHECK(p->seqs[0].curPattern == 9 && e2.arrSlot(1) == 3);
+    }
+    // drum generator: kick engine fills empty steps of track 1
+    {
+        auto p = std::make_unique<Project>();
+        auto& q = p->seqs[0];
+        q.mode = Mode::Multi;
+        q.drum.on[0] = true; q.drum.x = 0; q.drum.y = 0; q.drum.chaos = 0; q.drum.dens[0] = 64;
+        Engine e(*p);
+        auto n = ons(run(e, 4.0));
+        std::vector<double> at; for (auto& x : n) if (x.note == 36) at.push_back(x.ppq);
+        CHECK(at.size() == 2);                       // corner rhythm hits on steps 1 and 9 of a 16 step track
+        CHECK(q.pat().tracks[0].steps[0].active == false); // non destructive
+        q.drum.dens[0] = 127;
+        Engine e2(*p);
+        int n2 = 0; for (auto& x : ons(run(e2, 4.0))) n2 += x.note == 36;
+        CHECK(n2 > 8);
+        auto txt = serialize(*p); auto p2 = std::make_unique<Project>();
+        p->songs[2].lanes[3][7].pat = 4; p->songs[2].master = 2; p->arrQuant = 5;
+        txt = serialize(*p);
+        CHECK(deserialize(txt, *p2) && p2->seqs[0].drum.on[0] && p2->seqs[0].drum.dens[0] == 127
+              && p2->songs[2].lanes[3][7].pat == 4 && p2->songs[2].master == 2 && p2->arrQuant == 5);
+    }
+}
+
 int runControllerTests(); // defined in test_controller.cpp
 
 int main() {
@@ -913,6 +984,7 @@ int main() {
     testPerformTools();
     testGeneratorsRecording();
     testModulation();
+    testArrangerDrums();
     failures += runControllerTests();
     if (failures == 0) std::printf("ALL TESTS PASSED\n");
     else std::printf("%d FAILURE(S)\n", failures);

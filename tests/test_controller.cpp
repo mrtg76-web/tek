@@ -458,5 +458,38 @@ int runControllerTests() {
         r.c.render(f, r.t);
         CCHECK(f.line1.rfind("Keyboard Arp", 0) == 0);
     }
+    { // arranger view and the drum generator keys
+        Rig r;
+        r.press(Btn::Arranger);
+        r.tap(0, 0);                               // empty slot: current pattern added
+        CCHECK(r.p->song().lanes[0][0].pat == 0 && r.p->song().lanes[0][0].rept == 1);
+        r.c.padDown(0, 0, r.t);
+        r.c.encoderTurn(3, 3, r.t);                // repeats 4
+        r.c.encoderTurn(2, 2, r.t);                // pattern 3
+        r.c.padUp(0, 0, r.t); r.t += 400;
+        CCHECK(r.p->song().lanes[0][0].rept == 4 && r.p->song().lanes[0][0].pat == 2);
+        r.press(Btn::Page);                        // pattern grid: append pattern 6 to lane 2
+        r.tap(5, 1);
+        CCHECK(r.p->song().lanes[1][0].pat == 5);
+        r.tap(5, 1);
+        CCHECK(r.p->song().lanes[1][1].pat == 5);
+        r.press(Btn::Page);
+        r.hold(Btn::Arranger); r.tap(4, 3); r.release(Btn::Arranger); // slot column
+        int filled = 0; for (int l = 0; l < 8; ++l) filled += r.p->song().lanes[(size_t) l][4].pat >= 0;
+        CCHECK(filled == 8 && r.p->song().lanes[0][4].pat == 0);
+        r.hold(Btn::Shift); r.press(Btn::Arranger); r.release(Btn::Shift);
+        CCHECK(r.p->arrOn);
+        Frame f; r.c.render(f, r.t);
+        CCHECK(f.line1.rfind("ARR: ARMED  Song 1", 0) == 0);
+        r.press(Btn::Arranger);
+        // drum generator: multitrack lanes, RANDOM + column 2
+        r.p->seqs[0].mode = Mode::Multi;
+        r.hold(Btn::Random); r.tap(1, 7); r.release(Btn::Random);
+        CCHECK(r.p->seqs[0].drum.on[0]);
+        r.hold(Btn::Seq1); r.tap(1, 6); r.release(Btn::Seq1);
+        r.c.encoderTurn(0, -5, r.t);
+        r.c.render(f, r.t);
+        CCHECK(r.p->seqs[0].drum.dens[1] == 54 && f.line1.rfind("Drum Gen T2 Snare", 0) == 0);
+    }
     return cfail;
 }

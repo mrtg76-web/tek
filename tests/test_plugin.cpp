@@ -130,6 +130,14 @@ int main() {
                 proc.controller().encoderTurn(0, 1, 1020);
                 proc.controller().padDown(0, 6, 1030); proc.controller().padDown(3, 6, 1030); proc.controller().padDown(7, 6, 1030);
             }
+            if (juce::SystemStats::getEnvironmentVariable("TEK_SERVE_ARR", "").isNotEmpty()) {
+                const juce::SpinLock::ScopedLockType sl(proc.lock);
+                auto& pr = proc.project();
+                for (int l = 0; l < 5; ++l) for (int c = 0; c < 10; ++c) if ((l + c) % 3 != 2) { auto& a = pr.songs[0].lanes[(size_t) l][(size_t) c]; a.pat = (int8_t) (c % 4); a.rept = 2; }
+                pr.songs[0].lanes[2][4].pat = -2;
+                pr.arrOn = true;
+                proc.controller().button(tek::Btn::Arranger, true, 1000); proc.controller().button(tek::Btn::Arranger, false, 1010);
+            }
             if (juce::SystemStats::getEnvironmentVariable("TEK_SERVE_MOD", "").isNotEmpty()) {
                 const juce::SpinLock::ScopedLockType sl(proc.lock);
                 auto& c = proc.controller();

@@ -284,6 +284,19 @@ void Engine::scheduleStep(int s, int t, double grid, double L, double bpm) {
         if (m[MD_ChStrum]) stMod.strum = (int8_t) std::clamp(stMod.strum + m[MD_ChStrum] * 100 / 127, -100, 100);
         if (m[MD_AccAmt]) stMod.accAmt = (int8_t) std::clamp(stMod.accAmt + m[MD_AccAmt] / 5, -24, 24);
     }
+    // multitrack drum generator (manual 6.6): extra triggers on empty steps of tracks 1-3, generated every cycle
+    if (q.mode == Mode::Multi && t < 3 && q.drum.on[(size_t) t] && !stMod.active) {
+        const auto& d = q.drum;
+        const auto& m = modSum[(size_t) s];
+        const int dens = std::clamp(d.dens[(size_t) t] + m[(size_t) (MD_DrKick + t)], 0, 127);
+        const int chaos = std::clamp(d.chaos + m[MD_DrChaos], 0, 127);
+        int lvl = drumLevel(t, pos - tr.start, std::clamp(d.x + m[MD_DrX], 0, 127), std::clamp(d.y + m[MD_DrY], 0, 127));
+        if (chaos) lvl += (int) ((rand01() * 2.0f - 1.0f) * chaos);
+        if (dens > 0 && lvl > 255 - dens * 2) {
+            stMod = Step(); stMod.active = true; stMod.numNotes = 1; stMod.notes[0] = 0;
+            stMod.velocity = (uint8_t) std::clamp(45 + lvl * 82 / 255, 1, 127); stMod.gate = tr.defGate;
+        }
+    }
     const Step& st = stMod;
     const bool parity = (r.nextIdx % 2) != 0; // nextIdx already refers to this step here
     const int64_t counter = r.counter;
@@ -931,6 +944,7 @@ void Engine::process(const Transport& host, int numSamples, const std::vector<Mi
     const double blockEnd = tp.ppq + numSamples * ppqPerSample;
     applyGlobals(out);
     processRecording(tp.ppq, blockEnd, tp.bpm, tp.playing, numSamples, ppqPerSample, out);
+    arrProcess(tp.ppq, blockEnd, tp.playing, out);
     computeMod(tp.ppq, tp.bpm, tp.playing, out);
     applySeqMods();
     struct ModRestore { Engine& e; ~ModRestore() { e.restoreSeqMods(); } } modRestore { *this };

@@ -50,7 +50,15 @@ public:
     std::array<uint8_t, kNumSeqs> multiFill {};              // perform: multitrack fill intensity 0..4
     std::array<uint8_t, kNumSeqs> matFill {};                // perform: matriceal trigger fill 0..12
     uint8_t seqSolo = 0;                                     // perform: soloed sequencers (bit mask)
-    bool seqAudible(int s) const { const auto& q = proj.seqs[(size_t) s]; return q.active && !q.muted && (seqSolo == 0 || (seqSolo >> s) & 1); }
+    bool seqAudible(int s) const { const auto& q = proj.seqs[(size_t) s]; return q.active && !q.muted && !((arrSilent >> s) & 1) && (seqSolo == 0 || (seqSolo >> s) & 1); }
+    // --- arranger playback (manual 8.5 / 8.6) ---
+    int arrSlot(int lane) const { return arrLanes[(size_t) lane].slot; }
+    int arrCued(int lane) const { return arrLanes[(size_t) lane].cue; }
+    int arrRepLeft(int lane) const { return arrLanes[(size_t) lane].repLeft; }
+    double arrProgress() const;                          // 0..1 through the current launch cycle
+    bool arrPlaying() const { return arrRunning; }
+    void arrCue(int lane, int slot);                     // manual launch at the next boundary
+    void arrCueColumn(int slot);
 
     // --- recording (manual 4.12); call with the project lock held ---
     void recInput(int note, int vel, bool on);          // a played note (keyboard view or MIDI input)
@@ -163,6 +171,11 @@ private:
     void writeRecNote(int s, int t, int idx, int note, int vel, bool add);
     int recTrackFor(int s, int note) const;
     void applyGlobals(std::vector<MidiOut>& out);
+    void arrProcess(double ppq, double blockEnd, bool playing, std::vector<MidiOut>& out);
+    void arrStart(double ppq, std::vector<MidiOut>& out);
+    void arrGoto(int lane, int slot, std::vector<MidiOut>& out);
+    int arrNextSlot(int lane, int from, int rule);
+    double arrCycleBeats(int lane) const;
     void computeMod(double ppq, double bpm, bool playing, std::vector<MidiOut>& out);
     void applySeqMods();
     void restoreSeqMods();
@@ -202,6 +215,11 @@ private:
     std::vector<Cap> capture;
     int64_t sampleClock = 0, lastCapSample = -100000; int capGroup = 0;
     std::array<int, kNumSeqs> sentPc {};
+    // arranger
+    struct ArrLane { int slot = -1, repLeft = 0, cue = -1; double cycleStart = 0.0, cycleEnd = 0.0; };
+    std::array<ArrLane, kNumSeqs> arrLanes {};
+    bool arrRunning = false, arrStartPending = false;
+    uint8_t arrSilent = 0;
     // modulation
     std::array<std::array<int, MD_Count>, kNumSeqs> modSum {};
     struct LaneRt { int last[2] = {-99999, -99999}; std::atomic<int> posUi { -1 }, outUi { 0 }; };

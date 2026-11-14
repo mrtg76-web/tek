@@ -1,8 +1,57 @@
-# TEK — 8 kanallı performans sequencer'ı (Faz 1–3 ve 4a tamam: modlar, performans araçları, generator'lar, kayıt, modülasyon)
+# TEK — 8 kanallı performans sequencer'ı (Faz 1–4 tamam: modlar, performans araçları, generator'lar, kayıt, modülasyon, arranger)
 
 TEK, OXI ONE MKII kılavuzunu temel alan bir VST3/AU sequencer plugin'i. Ses üretmiyor, MIDI üretiyor. Ableton'daki synth'leri, drum rack'leri ve harici cihazları sürüyor.
 
-## Faz 4a: Modülasyon (yeni)
+## Faz 4b: Arranger ve drum generator (yeni)
+
+**Arranger (ARRANGER tuşu).** Her projede 4 şarkı vardır. Grid'de satırlar sequencer lane'leri (1–8), sütunlar slotlardır; 16 ve 32 tuşları 1–16 ile 17–32. slotlar arasında geçer.
+
+Renkler:
+- Lane rengi: pattern'li slot.
+- Gri: blank. Pattern çalmadan sessizce bekler.
+- Koyu mavi: boş. Atlanır.
+- Parlak: o anda çalan slot.
+- Yanıp sönen: sırada bekleyen slot.
+
+Slot düzenleme:
+- **Boş slota dokunmak** o sequencer'ın güncel pattern'ini slota ekler.
+- **SHIFT+pad** slotu temizler.
+- **ARRANGER basılıyken pad** o sütunu 8 sequencer'ın güncel pattern'leriyle doldurur. Mute'lu sequencer'ların slotu boş kalır.
+- **Slotu basılı tutup knob çevirmek:**
+  - Knob 1: Next (Next, Prev, 1st, Rnd, Othr).
+  - Knob 2: PrCh. SHIFT ile Bank.
+  - Knob 3: Patt (pattern, Blank ya da boş).
+  - Knob 4: Rept (OFF, 1–19, Inf). Knob 4'e dokunmak 1 ile Inf arasında geçer.
+- **Slot basılıyken 16 / 64** slotu sola veya sağa taşır.
+- **PAGE** pattern grid'ini açar. Bir pattern'e dokunmak onu o lane'in sonuna ekler; birkaç kez dokunursan art arda eklenir.
+- **COPY+pad / PASTE+pad** slot kopyalar ve yapıştırır. **SHIFT+PASTE** şarkıyı temizler.
+
+Knoblar (hiçbir pad basılı değilken):
+- Knob 1: düzenlenen şarkı (1–4).
+- Knob 2: hedef slotu seçer; knob 2'ye dokunmak şarkıyı o slota kopyalar.
+- Knob 3: master lane.
+- Knob 4: yeni slotlar için varsayılan tekrar sayısı.
+
+Çalma:
+- **SHIFT+ARRANGER** arranger'ı açar (tuş mavi yanar). Sonra Ableton'da Play'e bas.
+- Her lane kendi slotlarını tekrar sayısına ve Next kuralına göre ilerletir. Şarkının sonuna gelince başa döner.
+- Transport durunca arranger kendiliğinden kapanır.
+- Çalarken bir slota dokunmak onu sıraya koyar (clip launch). SHIFT+pad bütün sütunu sıraya koyar.
+- **Master lane** seçiliyse yalnızca o lane'in tekrar sayıları ilerlemeyi belirler; diğer lane'ler aynı sütuna geçer.
+- Bir tekrar turunun ne kadar süreceğini **SHIFT+PERF > "Arr launch quant"** belirler: P.End (pattern sonu), 1/2 Bar … 32 Bar. Varsayılan 1 Bar.
+- Ekranın ikinci satırı her lane için kalan tekrar sayısını gösterir: "i" sonsuz demek, "-" o lane'in boşta olduğunu.
+
+**Drum generator (Multitrack).** 1. track kick, 2. track snare, 3. track hat motorudur.
+- Lane görünümünde **RANDOM basılıyken 2. sütundaki pad** o track'in motorunu açar veya kapatır. RANDOM basılıyken bu pad'ler mavi yanar.
+- **SEQ tuşu basılıyken aynı pad** ayar menüsünü açar:
+  - Dens: o track'in yoğunluğu.
+  - X ve Y: ritim karakteri, üç track için ortak.
+  - Chaos: rastgelelik.
+- Yalnızca boş adımlara nota ekler; programladığın adımlar korunur. Üretilecek notalar grid'de turuncu görünür.
+- Ritim tabloları 32 adım için tasarlandı. Track uzunluğunu 32 yaparsan daha iyi sonuç alırsın.
+- Mod hedefi olarak da seçilebilir: DrKick, DrSnar, DrHat, DrX, DrY, DrChao.
+
+## Faz 4a: Modülasyon
 
 **MOD görünümü (MOD tuşu).** Her pattern'de 8 mod lane vardır. Grid seçili lane'i gösterir: sütunlar adımlar, satırlar değerdir.
 - Pad'e dokunmak o adımın değerini ayarlar; en üst satır en yüksek değerdir.

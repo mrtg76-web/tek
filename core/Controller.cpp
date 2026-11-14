@@ -200,6 +200,7 @@ void Controller::padDown(int x, int y, double nowMs) {
     if (grid == GridMode::Load) { loadPad(x, y, nowMs); return; }
     if (grid == GridMode::Save) { savePad(x, y, nowMs); return; }
     if (grid == GridMode::Mod) { modPadDown(x, y, nowMs); return; }
+    if (grid == GridMode::Arr) { arrPadDown(x, y, nowMs); return; }
     if (grid == GridMode::Column) { columnPad(x, y, nowMs); return; }
 
     if (isPlayer()) { msg("SHIFT + PERF > LOAD MIDI FILE", nowMs); heldPads.push_back({x, y, nowMs, true}); return; }
@@ -207,6 +208,18 @@ void Controller::padDown(int x, int y, double nowMs) {
     if (hasKeys()) { domPadDown(x, y, nowMs); return; }
     const int idx = stepAt(x);
     if (held(Btn::Flow) && !isStoch()) { flowStep(x, y, nowMs); heldPads.push_back({x, y, nowMs, true}); return; }
+    if (lanesView() && x == 1 && 7 - y < 3 && (held(Btn::Random) || heldBtn[(size_t) ((int) Btn::Seq1 + sel)])) { // drum generator (manual 6.6)
+        const int t = 7 - y;
+        heldPads.push_back({x, y, nowMs, true});
+        if (held(Btn::Random)) {
+            btnConsumed[(int) Btn::Random] = true;
+            auto& on = seq().drum.on[(size_t) t];
+            on = !on;
+            static const char* nm[3] = {"KICK", "SNARE", "HAT"};
+            msg(std::string("DRUM GEN T") + std::to_string(t + 1) + " " + nm[t] + (on ? " ON" : " OFF"), nowMs);
+        } else { btnConsumed[(int) Btn::Seq1 + sel] = true; drumTrack = t; menu = Menu::Drum; }
+        return;
+    }
     if (held(Btn::Random) && menu == Menu::RandPerf && lanesView() && x == 0) { // exclude a track from random perform
         int t = 7 - y; seq().rpMask ^= (uint8_t) (1u << t);
         btnConsumed[(int) Btn::Random] = true;
@@ -1377,8 +1390,8 @@ void Controller::renderSave(Frame& f, double nowMs) const {
 // ============================================================================ project menu (manual Project Menu)
 namespace {
 const char* kProjItems[] = {"Reload project", "Load project file", "Save project file", "Clear project",
-                            "Save as template", "Load template", "Load MIDI file", "Scale master", "Reload pattern"};
-constexpr int kNumProjItems = 9;
+                            "Save as template", "Load template", "Load MIDI file", "Scale master", "Reload pattern", "Arr launch quant"};
+constexpr int kNumProjItems = 10;
 }
 
 void Controller::editProject(int knob, int delta) {
@@ -1387,6 +1400,7 @@ void Controller::editProject(int knob, int delta) {
     if (knob == 1) {
         if (projItem == 4 || projItem == 5) projSlot = std::clamp(projSlot + delta, 0, kTemplateSlots - 1);
         if (projItem == 7) proj.scaleMaster = clampT<int8_t>(proj.scaleMaster + delta, -1, kNumSeqs - 1);
+        if (projItem == 9) proj.arrQuant = clampT<uint8_t>(proj.arrQuant + delta, 0, 7);
     }
 }
 
@@ -1695,6 +1709,139 @@ void Controller::renderModDisplay(Frame& f) const {
         f.labels[(size_t) k] = nm;
         f.values[(size_t) k] = l2.muted ? "--" : std::to_string(eng.modLanePos(sel, b + k) >= 0 ? eng.modLaneOut(sel, b + k) : 0);
     }
+}
+
+// ============================================================================ arranger (manual 8.x)
+void Controller::arrPadDown(int x, int y, double nowMs) {
+    auto& song = proj.song();
+    const int lane = y;
+    heldPads.push_back({x, y, nowMs, true});
+    if (arrPicker) { // pattern grid: add (or, with a slot held, change) patterns
+        auto& cells = song.lanes[(size_t) lane];
+        if (heldPads.size() > 1 && heldPads.front().y == lane) {
+            auto& c = cells[(size_t) (arrColPg * 16 + heldPads.front().x)];
+            c.pat = (int8_t) x; if (c.rept == 0) c.rept = proj.arrDefRept;
+            msg("SLOT PATTERN " + std::to_string(x + 1), nowMs);
+            return;
+        }
+        int last = -1;
+        for (int c = 0; c < kArrSlots; ++c) if (cells[(size_t) c].pat != -1) last = c;
+        if (last + 1 >= kArrSlots) { msg("LANE IS FULL", nowMs); return; }
+        cells[(size_t) (last + 1)] = ArrCell(); cells[(size_t) (last + 1)].pat = (int8_t) x; cells[(size_t) (last + 1)].rept = proj.arrDefRept;
+        msg("S" + std::to_string(lane + 1) + " SLOT " + std::to_string(last + 2) + ": P" + std::to_string(x + 1), nowMs);
+        return;
+    }
+    const int slot = arrColPg * 16 + x;
+    auto& cell = song.lanes[(size_t) lane][(size_t) slot];
+    if (held(Btn::Arranger)) { // whole slot column from the current patterns
+        btnConsumed[(int) Btn::Arranger] = true;
+        for (int l = 0; l < kNumSeqs; ++l) {
+            auto& c = song.lanes[(size_t) l][(size_t) slot];
+            c = ArrCell();
+            if (!proj.seqs[(size_t) l].muted) { c.pat = (int8_t) proj.seqs[(size_t) l].curPattern; c.rept = proj.arrDefRept; }
+        }
+        msg("SLOT COLUMN " + std::to_string(slot + 1), nowMs);
+        return;
+    }
+    if (held(Btn::Copy)) { btnConsumed[(int) Btn::Copy] = true; arrClip = std::make_unique<ArrCell>(cell); msg("SLOT COPIED", nowMs); return; }
+    if (held(Btn::Paste)) { btnConsumed[(int) Btn::Paste] = true; if (arrClip) { cell = *arrClip; msg("SLOT PASTED", nowMs); } return; }
+    if (eng.arrPlaying()) { // clip launch
+        if (held(Btn::Shift)) { btnConsumed[(int) Btn::Shift] = true; eng.arrCueColumn(slot); msg("CUE COLUMN " + std::to_string(slot + 1), nowMs); }
+        else if (cell.playable()) { eng.arrCue(lane, slot); msg("CUE S" + std::to_string(lane + 1) + " SLOT " + std::to_string(slot + 1), nowMs); }
+        return;
+    }
+    if (held(Btn::Shift)) { btnConsumed[(int) Btn::Shift] = true; cell = ArrCell(); msg("SLOT CLEARED", nowMs); return; }
+    if (cell.pat == -1) { cell = ArrCell(); cell.pat = (int8_t) proj.seqs[(size_t) lane].curPattern; cell.rept = proj.arrDefRept; }
+}
+
+void Controller::editArr(int knob, int delta, double nowMs) {
+    if (!heldPads.empty() && !arrPicker) {
+        for (auto& h : heldPads) h.consumed = true;
+        auto& c = proj.song().lanes[(size_t) heldPads.front().y][(size_t) (arrColPg * 16 + heldPads.front().x)];
+        if (knob == 0) c.next = clampT<uint8_t>(c.next + delta, 0, 4);
+        if (knob == 1) { if (held(Btn::Shift)) { btnConsumed[(int) Btn::Shift] = true; c.bank = clampT<uint8_t>(c.bank + delta, 0, 129); } else c.pc = clampT<uint8_t>(c.pc + delta, 0, 129); }
+        if (knob == 2) { c.pat = clampT<int8_t>(c.pat + delta, -2, kNumPatterns - 1); if (c.pat != -1 && c.rept == 0) c.rept = 1; }
+        if (knob == 3) c.rept = clampT<uint8_t>(c.rept + delta, 0, kArrInf);
+        return;
+    }
+    if (knob == 0) { proj.curSong = clampT<uint8_t>(proj.curSong + delta, 0, kNumSongs - 1); msg("SONG " + std::to_string(proj.curSong + 1), nowMs); }
+    if (knob == 1) arrCopyTo = std::clamp(arrCopyTo + delta, 0, kNumSongs - 1);
+    if (knob == 2) proj.song().master = clampT<int8_t>(proj.song().master + delta, -1, kNumSeqs - 1);
+    if (knob == 3) proj.arrDefRept = clampT<uint8_t>(proj.arrDefRept + delta, 1, kArrInf);
+}
+
+void Controller::arrKnobTap(int knob, double nowMs) {
+    if (!heldPads.empty() && !arrPicker) {
+        for (auto& h : heldPads) h.consumed = true;
+        auto& c = proj.song().lanes[(size_t) heldPads.front().y][(size_t) (arrColPg * 16 + heldPads.front().x)];
+        if (knob == 3) c.rept = c.rept == kArrInf ? 1 : kArrInf;
+        if (knob == 0) c.next = 0;
+        return;
+    }
+    if (knob == 1) {
+        if (arrCopyTo == proj.curSong) { msg("CHOOSE ANOTHER SONG SLOT", nowMs); return; }
+        proj.songs[(size_t) arrCopyTo] = proj.song();
+        msg("SONG " + std::to_string(proj.curSong + 1) + " SAVED TO " + std::to_string(arrCopyTo + 1), nowMs);
+    }
+    if (knob == 2) proj.song().master = -1;
+}
+
+void Controller::renderArr(Frame& f, double nowMs) const {
+    const bool blink = std::fmod(nowMs, 300.0) < 150.0;
+    const auto& song = proj.song();
+    for (int y = 0; y < 8; ++y) {
+        const auto& q = proj.seqs[(size_t) y];
+        const uint32_t col = seqColor(q.color);
+        for (int x = 0; x < 16; ++x) {
+            uint32_t c;
+            if (arrPicker) {
+                c = q.patterns[(size_t) x].isEmpty() ? 0x0c0c0c : dim(col, 0.4f);
+                if (!heldPads.empty() && heldPads.front().y == y && song.lanes[(size_t) y][(size_t) (arrColPg * 16 + heldPads.front().x)].pat == x) c = 0xff3030;
+            } else {
+                const int slot = arrColPg * 16 + x;
+                const auto& cell = song.lanes[(size_t) y][(size_t) slot];
+                c = cell.pat == -1 ? 0x0a1426 : cell.pat == -2 ? 0x505050 : dim(col, cell.rept == 0 ? 0.12f : 0.4f);
+                if (eng.arrPlaying() && eng.arrSlot(y) == slot && cell.pat != -1) c = cell.pat == -2 ? 0xc0c0c0 : col;
+                if (eng.arrPlaying() && eng.arrCued(y) == slot) c = blink ? 0xffffff : c;
+            }
+            f.pads[(size_t) (y * 16 + x)] = c;
+        }
+    }
+}
+
+void Controller::renderArrDisplay(Frame& f) const {
+    const auto& song = proj.song();
+    auto sv = [](int pc) { return pc == 0 ? std::string("=") : pc == 1 ? std::string("OFF") : std::to_string(pc - 1); };
+    if (!heldPads.empty() && !arrPicker) {
+        const int lane = heldPads.front().y, slot = arrColPg * 16 + heldPads.front().x;
+        const auto& c = song.lanes[(size_t) lane][(size_t) slot];
+        f.line1 = "Slot " + std::to_string(slot + 1) + "  SQ" + std::to_string(lane + 1) + "  " + (c.pat >= 0 ? "Pattern " + std::to_string(c.pat + 1) : c.pat == -2 ? std::string("Blank") : std::string("Empty"));
+        f.line2 = "Bank " + sv(c.bank) + "  (Shift+knob 2)   Page: pattern grid";
+        f.labels = {"Next", "PrCh", "Patt", "Rept"};
+        f.values = {arrNextLabel(c.next), sv(c.pc), c.pat >= 0 ? std::to_string(c.pat + 1) : c.pat == -2 ? "Blnk" : "-", c.rept == 0 ? "OFF" : c.rept >= kArrInf ? "Inf" : std::to_string(c.rept)};
+        return;
+    }
+    const char* st = eng.arrPlaying() ? "ON" : proj.arrOn ? "ARMED" : "OFF";
+    f.line1 = std::string("ARR: ") + st + "  Song " + std::to_string(proj.curSong + 1) + "  " + (song.master < 0 ? std::string("M:OFF") : "M:S" + std::to_string(song.master + 1)) + "  " + arrQuantLabel(proj.arrQuant);
+    std::string lanes;
+    for (int l = 0; l < kNumSeqs; ++l) {
+        const int sl = eng.arrSlot(l);
+        char ch = '-';
+        if (eng.arrPlaying() && sl >= 0) { const int r = eng.arrRepLeft(l); ch = r > 99 ? 'i' : r > 9 ? '+' : (char) ('0' + r); }
+        lanes += ch; lanes += ' ';
+    }
+    f.line2 = arrPicker ? std::string("PATTERN GRID: tap = add to the lane") : "Lanes " + lanes + (arrColPg ? " 17-32" : " 1-16");
+    f.labels = {"Song", "Copy>", "Master", "DefRpt"};
+    f.values = {std::to_string(proj.curSong + 1), std::to_string(arrCopyTo + 1), song.master < 0 ? "OFF" : "S" + std::to_string(song.master + 1), proj.arrDefRept >= kArrInf ? "Inf" : std::to_string(proj.arrDefRept)};
+    if (eng.arrPlaying()) f.progress = (int) (eng.arrProgress() * 15.99);
+}
+
+void Controller::editDrum(int knob, int delta) {
+    auto& d = seq().drum;
+    if (knob == 0) d.dens[(size_t) drumTrack] = clampT<uint8_t>(d.dens[(size_t) drumTrack] + delta * 2, 0, 127);
+    if (knob == 1) d.x = clampT<uint8_t>(d.x + delta * 2, 0, 127);
+    if (knob == 2) d.y = clampT<uint8_t>(d.y + delta * 2, 0, 127);
+    if (knob == 3) d.chaos = clampT<uint8_t>(d.chaos + delta, 0, 127);
 }
 
 // ============================================================================ arpeggiator menu (manual 5.3)
@@ -2036,6 +2183,8 @@ void Controller::encoderTurn(int knob, int delta, double nowMs) {
     if (menu == Menu::Matrix) { editMatrix(knob, delta); return; }
     if (menu == Menu::Quick) { editQuick(knob, delta, nowMs); return; }
     if (grid == GridMode::Mod && menu == Menu::None) { editMod(knob, delta, nowMs); return; }
+    if (grid == GridMode::Arr && menu == Menu::None) { editArr(knob, delta, nowMs); return; }
+    if (menu == Menu::Drum) { editDrum(knob, delta); return; }
     if (eng.stepRecording() && menu == Menu::None && knob == 1) { eng.stepRecMove(delta); return; }
     if (menu != Menu::None && menu != Menu::Arp) { editMenu(knob, delta, nowMs); return; }
     if (held(Btn::Shift)) { btnConsumed[(int) Btn::Shift] = true; editShift(knob, delta, nowMs); return; }
@@ -2099,6 +2248,8 @@ void Controller::tapKnob(int knob, double nowMs) {
         return;
     }
     if (grid == GridMode::Mod && menu == Menu::None) { modKnobTap(knob, nowMs); return; }
+    if (grid == GridMode::Arr && menu == Menu::None) { arrKnobTap(knob, nowMs); return; }
+    if (menu == Menu::Drum) { if (knob == 0) { auto& on = seq().drum.on[(size_t) drumTrack]; on = !on; } return; }
     if (menu == Menu::RecSet) return;
     if (eng.stepRecording() && menu == Menu::None) {
         if (knob == 0) { eng.stepRecReset(); msg("STEP REC: START", nowMs); }
@@ -2218,6 +2369,17 @@ void Controller::seqButton(int s, double nowMs) {
 
 void Controller::pageButton(int p, double nowMs) {
     auto& tr = track();
+    if (grid == GridMode::Arr) {
+        if (!heldPads.empty() && !arrPicker && (p == 0 || p == 3)) { // move the held slot left / right
+            auto& cells = proj.song().lanes[(size_t) heldPads.front().y];
+            const int a = arrColPg * 16 + heldPads.front().x, b = a + (p == 0 ? -1 : 1);
+            for (auto& h : heldPads) h.consumed = true;
+            if (b >= 0 && b < kArrSlots) { std::swap(cells[(size_t) a], cells[(size_t) b]); msg("SLOT MOVED", nowMs); }
+            return;
+        }
+        if (p < 2) arrColPg = p;
+        return;
+    }
     if (grid == GridMode::Mod && !held(Btn::Shift)) { modPg[(size_t) sel] = nowMs - lastTap[(size_t) ((int) Btn::P16 + p)] < kDoubleTapMs ? p + 4 : p; return; } // double tap: 65-128
     if (held(Btn::Shift)) { // move sequence: 16 left, 32 up, 48 down, 64 right
         btnConsumed[(int) Btn::Shift] = true;
@@ -2326,6 +2488,10 @@ void Controller::button(Btn b, bool down, double nowMs) {
         if (b == Btn::Keyboard && grid == GridMode::Keys && nowMs - keyboardDownMs > 600 && !held(Btn::Shift)) grid = GridMode::Steps; // momentary
         if (b == Btn::Random && menu == Menu::RandPerf && nowMs - randDownMs > 600) menu = Menu::None; // momentary
         if (b == Btn::Perf && grid == GridMode::Perform && nowMs - perfDownMs > 600) grid = GridMode::Steps;
+        if (b == Btn::Arranger && !btnConsumed[bi]) {
+            if (grid == GridMode::Arr) grid = GridMode::Steps;
+            else { grid = GridMode::Arr; menu = Menu::None; arrPicker = false; }
+        }
         if (b == Btn::Rec && !btnConsumed[bi]) {
             if (nowMs - recDownMs >= 600) { eng.captureClear(); msg("CAPTURE BUFFER CLEARED", nowMs); }
             else recTap(nowMs);
@@ -2381,6 +2547,7 @@ void Controller::button(Btn b, bool down, double nowMs) {
             else if (menu == Menu::RandPerf || menu == Menu::RandGen || menu == Menu::RecSet) menuPage = (menuPage + 1) % 2;
             else if (menu == Menu::Gen || menu == Menu::Lfo) menuPage = (menuPage + 1) % 4;
             else if (grid == GridMode::Mod && menu == Menu::None) { modSettings = !modSettings; modParam = 0; }
+            else if (grid == GridMode::Arr && menu == Menu::None) arrPicker = !arrPicker;
             else if (menu == Menu::Nudge) menu = Menu::Bend;
             else if (menu == Menu::Bend) menu = Menu::Nudge;
             break;
@@ -2417,6 +2584,7 @@ void Controller::button(Btn b, bool down, double nowMs) {
             break;
         case Btn::Paste:
             if (shift && grid == GridMode::Mod) { pushUndo(); auto& ln = lane(selLane()); ln.val.fill(0); msg("MOD LANE CLEARED", nowMs); break; }
+            if (shift && grid == GridMode::Arr) { proj.song() = Song(); msg("SONG CLEARED", nowMs); break; }
             if (shift && isStoch()) { pushUndo(); seq().pat().stoch.valid = false; msg("NEW PHRASE", nowMs); break; }
             if (shift && isMatr()) { pushUndo(); auto& mt = matTrack(matSel[(size_t) sel]); auto ch = mt.channel; auto base = mt.baseNote; mt = MatTrack(); mt.channel = ch; mt.baseNote = base; msg("TRACK CLEARED", nowMs); break; }
             if (shift) {
@@ -2544,8 +2712,8 @@ void Controller::button(Btn b, bool down, double nowMs) {
             if (grid == GridMode::Mod) { grid = GridMode::Steps; break; }
             grid = GridMode::Mod; menu = Menu::None; modSettings = false;
             break;
-        case Btn::Arranger:
-            msg(std::string(btnLabel(b)) + ": PHASE 4b", nowMs);
+        case Btn::Arranger: // view toggles on release, so ARRANGER + pad (slot column) works
+            if (shift) { proj.arrOn = !proj.arrOn; msg(proj.arrOn ? "ARRANGER ON" : "ARRANGER OFF", nowMs); btnConsumed[bi] = true; }
             break;
         default: break;
     }
@@ -2742,6 +2910,7 @@ void Controller::renderDisplay(Frame& f, double nowMs) const {
         std::string slot = "-";
         if (projItem == 4 || projItem == 5) { slot = std::to_string(projSlot + 1); f.line2 = "Template " + slot + ((templateMask >> projSlot) & 1 ? " (used)" : " (empty)"); }
         else if (projItem == 7) { slot = proj.scaleMaster < 0 ? "OFF" : "SQ" + std::to_string(proj.scaleMaster + 1); f.line2 = "others follow its scale + root"; }
+        else if (projItem == 9) { slot = arrQuantLabel(proj.arrQuant); f.line2 = "arranger slot cycle length"; }
         else f.line2 = projItem == 0 ? "back to the last saved Ableton set" : projItem == 3 ? "erases every sequencer" : "";
         set("Item", std::to_string(projItem + 1) + "/" + std::to_string(kNumProjItems), "Slot", slot, "-", "", "Go", "tap");
     } else if (menu == Menu::RandPerf) {
@@ -2781,6 +2950,14 @@ void Controller::renderDisplay(Frame& f, double nowMs) const {
             "Rate", tr.loopRate == 255 ? divisionLabel(tr.div) : divisionLabel((Division) tr.loopRate), "Track", isMulti() ? std::to_string(trackIndex() + 1) : "-");
     }
     if (grid == GridMode::Mod && menu == Menu::None) renderModDisplay(f);
+    if (grid == GridMode::Arr && menu == Menu::None) renderArrDisplay(f);
+    if (menu == Menu::Drum) {
+        static const char* nm[3] = {"Kick", "Snare", "Hat"};
+        const auto& d = q.drum;
+        f.line1 = "Drum Gen T" + std::to_string(drumTrack + 1) + " " + nm[drumTrack] + (d.on[(size_t) drumTrack] ? "  ON" : "  OFF");
+        f.line2 = "X / Y / Chaos shared by tracks 1-3";
+        set("Dens", std::to_string(d.dens[(size_t) drumTrack]), "X", std::to_string(d.x), "Y", std::to_string(d.y), "Chaos", std::to_string(d.chaos));
+    }
     if (grid == GridMode::Save && menu == Menu::None) { f.line1 = "SAVE: rows = sequencers, columns = slots"; f.line2 = "double tap: save current pattern here"; }
     if (eng.stepRecording() && menu == Menu::None) {
         const auto& str = q.pat().tracks[(size_t) genTrack()];
@@ -2912,6 +3089,8 @@ void Controller::renderLanes(Frame& f, double nowMs) const {
             if (tr.muted && st.active) c = dim(c, 0.3f);
             if (x == 0 && selT && !st.active) c = 0x8a7a10;
             if (idx == tr.end && selT && !st.active && inRange) c = 0x403a08;
+            if (t < 3 && q.drum.on[(size_t) t] && !st.active && inRange && drumLevel(t, idx - tr.start, q.drum.x, q.drum.y) > 255 - q.drum.dens[(size_t) t] * 2) c = 0x603000;
+            if (x == 1 && t < 3 && held(Btn::Random)) c = q.drum.on[(size_t) t] ? 0x3090ff : 0x10284a;
             if (idx == ph && eng.isRunning() && inRange && !((predMask >> t) & 1)) c = (c == 0 || c == 0x34373b) ? 0x55585e : mix(c, 0xffffff, 0.45f);
             if (muteView && x == 0) c = tr.muted ? 0 : 0x2050ff;
             if (muteView && x == 15) c = (eng.soloMask[(size_t) sel] & (1u << t)) ? 0xffd000 : 0x202020;
@@ -2996,6 +3175,7 @@ void Controller::render(Frame& f, double nowMs) const {
     else if (grid == GridMode::Load) renderLoad(f, nowMs);
     else if (grid == GridMode::Save) renderSave(f, nowMs);
     else if (grid == GridMode::Mod) renderMod(f);
+    else if (grid == GridMode::Arr) renderArr(f, nowMs);
     else if (grid == GridMode::Column) renderColumn(f);
     else if (lanesView()) renderLanes(f, nowMs);
     else if (isStoch()) renderStoch(f);
@@ -3039,6 +3219,8 @@ void Controller::render(Frame& f, double nowMs) const {
     if (grid == GridMode::Perform) f.leds[(int) Btn::Perf] = 0xffffff;
     if (menu == Menu::Gen) f.leds[(int) Btn::Gen] = 0xffffff;
     if (grid == GridMode::Mod || menu == Menu::Matrix) f.leds[(int) Btn::Mod] = 0xffffff;
+    if (proj.arrOn) f.leds[(int) Btn::Arranger] = eng.arrPlaying() ? 0x3070ff : (std::fmod(nowMs, 600.0) < 300.0 ? 0x3070ff : 0x102040);
+    if (grid == GridMode::Arr) f.leds[(int) Btn::Arranger] = std::max<uint32_t>(f.leds[(int) Btn::Arranger], 0xb0b0b0);
     if (menu == Menu::Lfo) f.leds[(int) Btn::Lfo] = 0xffffff;
     else if (seq().lfo[0].amt || seq().lfo[1].amt) f.leds[(int) Btn::Lfo] = std::fmod(nowMs, 800.0) < 400.0 ? 0x5050a0 : 0x202040;
     if (grid == GridMode::Save) f.leds[(int) Btn::Save] = 0xffffff;
